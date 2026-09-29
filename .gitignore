@@ -1,2 +1,5 @@
 __pycache__/
 *.tmp
+# planilha com dados reais (pessoais) — não versionar
+Financas_Pessoais_Dashboard.xlsx
+Financas_Plinio_*.xlsx
