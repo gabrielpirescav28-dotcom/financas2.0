@@ -236,8 +236,8 @@ CORRECOES_ATUALIZAR = [
     (r"contas do m[eê]s|introdu|linha 16", "A aba Contas do mês saiu: as contas fixas (favoritos com Recorrente? = sim) já aparecem "
      "em Lançamentos como Pendente no mês atual e nos 2 seguintes. Ao pagar, é só trocar para Pago (e corrigir o valor, se mudou). "
      "Na aba Mês elas aparecem no bloco de gastos fixos e em Próximos vencimentos."),
-    (r"parcelar", "A aba Parcelar saiu: lance só a 1ª parcela com \"1/10\" na coluna Parcela; as que faltam entram como Pendente, "
-     "uma por mês, na próxima atualização. Troque para Pago quando pagar."),
+    (r"parcelar", "Aba Parcelar: preencha descrição, valor, nº de parcelas e a data da 1ª; o bloco à direita monta 1/10, 2/10… "
+     "Copie e cole só os valores (Ctrl+Shift+V) na linha livre de Lançamentos (o ✚ leva até ela). As futuras entram como Pendente."),
     (r"or[cç]amento", "O orçamento agora fica no topo da aba Visão do ano: meta mensal por categoria (latão, você edita), realizado "
      "no mês de trabalho e % usado (verde até 80%, amarelo até 100%, vermelho acima)."),
     (r"descont[ae]r? depois|desconta depois", "Com Situação = Descontar Depois, escreva de quem descontar na coluna Descontar de "
@@ -254,6 +254,12 @@ PEDIDO_ATALHO = ("Mudar Pendente para Pago a partir da aba Mês (alternativa 2: 
                  "Cada lançamento dos blocos da aba Mês tem um ✎ à direita. Clicou, vai direto para a Situação daquela conta em "
                  "Lançamentos: troque para Pago (ou corrija o valor) e clique em 📒 Mês, fixo no topo, para voltar. Os dados "
                  "continuam num lugar só (Lançamentos); o Mês só mostra.")
+PEDIDO_AUTONOMIA = ("Menos dependência de IA: atalho na aba Mês, contas fixas até dez/2027 e aba Parcelar para colar (pedido no chat, 30/09/2026)",
+                    "FEITO ✔",
+                    "Cada lançamento da aba Mês tem um ✎ que leva direto à Situação dele em Lançamentos. As contas fixas (uma por mês) "
+                    "já estão como Pendente de outubro/2026 a dezembro/2027; as dos meses depois do próximo ficam no fim da tabela. "
+                    "A aba Parcelar voltou: preencha a compra, copie o bloco da direita e cole só os valores (Ctrl+Shift+V) na linha "
+                    "livre de Lançamentos (o ✚ leva até ela). Lançamentos tem 40 linhas em branco; quando acabarem, o ✚ leva ao fim da tabela.")
 PEDIDO_TOPO = ("Não ter que ir até a última linha nem procurar a conta pendente para mudar para Pago (pedido no chat, 30/09/2026)",
                "FEITO ✔",
                "Lançamentos agora abre com a lista do que está Pendente até o fim do mês que vem, pela data de vencimento "
@@ -906,10 +912,13 @@ OBS_PREVISTA = "prevista (conta fixa)"
 OBS_PROJETADA = "projetada (previsão de parcela)"
 
 
-def preparar_previstas(D, hoje=None, meses=2):
+PREVISTAS_ATE = (2027, 12)      # contas fixas pré-criadas como Pendente até este mês (pedido: até dezembro de 2027)
+
+
+def preparar_previstas(D, hoje=None, ate=PREVISTAS_ATE):
     """Correção IA (unir abas / menos procedimento): em vez de copiar o bloco de Contas do mês e usar o Parcelar,
     as contas fixas (favoritos com Recorrente? = sim) e as parcelas restantes já entram em Lançamentos como
-    Pendente para o mês atual e o seguinte. No dia, é só trocar para Pago (e corrigir o valor, se mudou).
+    Pendente do mês atual até PREVISTAS_ATE. No dia, é só trocar para Pago (e corrigir o valor, se mudou).
     Previstas que ficaram sobrando (você lançou a conta numa linha nova) são retiradas."""
     hoje = hoje or dt.date.today()
     lanc = D["lanc"]
@@ -919,7 +928,11 @@ def preparar_previstas(D, hoje=None, meses=2):
     D["lanc"] = lanc = [d for d in lanc if not ((d.get("Observação") or "") == OBS_PREVISTA and d.get("Situação") == "Pendente"
                                                and reais[chave(d)] > 0)]
     existentes = collections.Counter(chave(d) for d in lanc)
-    horizonte = [_mais_meses(hoje.year, hoje.month, k) for k in range(meses)]
+    horizonte = []
+    a_, m_ = hoje.year, hoje.month
+    while (a_, m_) <= tuple(ate):
+        horizonte.append((a_, m_))
+        a_, m_ = _mais_meses(a_, m_, 1)
     novas = []
     # 2) contas fixas recorrentes
     for a in D.get("atalhos") or []:
@@ -1322,6 +1335,7 @@ def construir(D, caminho):
     ws_cad.title = "Mês"
     ws_corr = wb.create_sheet("Correções IA")
     ws_lanc = wb.create_sheet("Lancamentos")
+    ws_parc = wb.create_sheet("Parcelar")
     ws_inv = wb.create_sheet("Investimentos")
     ws_p1 = wb.create_sheet("Planos")
     ws_ano = wb.create_sheet("Visão do ano")
@@ -1421,12 +1435,16 @@ def construir(D, caminho):
     a_pagar = sorted((i for i in idx if D["lanc"][i].get("Situação") == "Pendente" and quando(D["lanc"][i]) <= fim_prox),
                      key=lambda i: (quando(D["lanc"][i]), i))
     ja = set(a_pagar)
+    # previstas de meses mais distantes ficam no fim da tabela (em ordem de data), para não esconder o histórico recente
+    futuras = sorted((i for i in idx if i not in ja and D["lanc"][i].get("Situação") == "Pendente" and quando(D["lanc"][i]) > fim_prox),
+                     key=lambda i: (quando(D["lanc"][i]), i))
+    ja |= set(futuras)
     resto = sorted((i for i in idx if i not in ja), key=lambda i: (D["lanc"][i].get("Data") or D["lanc"][i].get("Competência")
                                                                   or dt.date.min, i), reverse=True)
-    lanc = [D["lanc"][i] for i in a_pagar + resto]
+    lanc = [D["lanc"][i] for i in a_pagar + resto + futuras]
     D["lanc"] = lanc
     NA = len(a_pagar)
-    NOVAS = 20
+    NOVAS = 40
     n = len(lanc)
     H = 4
     ult = H + NOVAS + n
@@ -1434,6 +1452,9 @@ def construir(D, caminho):
     ncol = len(COLS_LANC)
     ci = {h: 2 + i for i, h in enumerate(COLS_LANC)}          # índice da coluna por nome
     cl = {h: CL(c) for h, c in ci.items()}                     # letra da coluna por nome
+    # ✚: primeira linha em branco; se as linhas em branco acabarem, a primeira linha depois do fim da tabela
+    usadas = f"COUNTA(Lancamentos!${cl['Descrição']}${NB0}:${cl['Descrição']}${NB0 + NOVAS - 1})"
+    D["_link_nova"] = f'"#Lancamentos!B"&IF({usadas}<{NOVAS},{NB0}+{usadas},ROWS({L}[Data])+{H + 1})'
     pintar_fundo(ws, ncol + 3, 3)
     titulo_aba(ws, "Lançamentos", "Digite Data, Descrição e Valor: com um favorito, Tipo, Categoria, Situação e Pote se preenchem sozinhos. "
                "Clique no [+] acima das colunas para ver os detalhes (conta, parcela, vencimento...). " + D["subtitulo_lanc"], ncol)
@@ -1516,7 +1537,7 @@ def construir(D, caminho):
     ws.column_dimensions.group(cl["Conta"], cl["Observação"], outline_level=1, hidden=True)
     ws.sheet_properties.outlinePr.summaryRight = False
     # Atalhos no topo
-    put(ws, f"{cl['Parcela']}2", f'=HYPERLINK("#Lancamentos!B"&({NB0}+COUNTA({cl["Descrição"]}{NB0}:{cl["Descrição"]}{NB0 + NOVAS - 1})),"✚  Lançar algo novo")',
+    put(ws, f"{cl['Parcela']}2", "=HYPERLINK(" + D["_link_nova"] + ',"✚  Lançar algo novo")',
         font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
     ws.merge_cells(f"{cl['Parcela']}2:{cl['Vencimento']}2")
     put(ws, f"{cl['Tipo']}2", '=HYPERLINK("#\'Mês\'!A1","📒  Mês")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
@@ -1931,6 +1952,107 @@ def construir(D, caminho):
     put(ws, "H2", '=HYPERLINK("#\'Mês\'!A1","⌂  Mês")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
     ws.freeze_panes = f"C{HR + 1}"
 
+    # ---------------------------------------------------------------- Parcelar / repetir
+    ws = ws_parc
+    pintar_fundo(ws, 20, 3)
+    # Correção IA: aba Parcelar de volta (compra parcelada sem depender de atualização): gera as linhas para colar
+    titulo_aba(ws, "Parcelar ou repetir", "Preencha os campos à esquerda: o bloco à direita gera uma linha por parcela (ou por mês). Copie, vá até a primeira linha vazia de Lançamentos e cole só os valores.", 16)
+    larguras(ws, {"A": 2, "B": 30, "C": 22, "D": 3})
+    put(ws, "B4", "COMPRA / LANÇAMENTO", font=fnt(10, True, P["suave"]))
+    campos = [
+        ("Modo", "Parcelado", '"Parcelado,Repetir todo mês"', "Parcelado: divide em parcelas 1/n, 2/n...  Repetir: o mesmo valor todo mês (aluguel, mesada, assinatura)."),
+        ("Descrição", "Geladeira nova (exemplo)", "=ListaFavoritos", "Pode escolher um favorito: tipo, categoria e pote vêm dele se ficarem vazios abaixo."),
+        ("Valor (R$)", 3600, None, None),
+        ("O valor informado é", "Total da compra", '"Total da compra,Valor de cada parcela"', None),
+        ("Nº de parcelas / meses", 10, None, "Entre 1 e 60."),
+        ("Data da 1ª parcela", dt.date(D["ano_padrao"] + (D["mes_padrao"] // 12), D["mes_padrao"] % 12 + 1, 10), None, None),
+        ("Tipo", tipo_padrao, "=Tipos", None),
+        ("Categoria (vazio = do favorito)", None, "=Categorias", None),
+        ("Pote (vazio = do favorito)", None, "=Potes", None),
+        ("Quem", None, "=Pessoas", None),
+        ("Conta / cartão", None, "=Contas", None),
+        ("Forma de pagamento", "Cartão de crédito" if "Cartão de crédito" in D["formas"] else None, "=FormasPagamento", None),
+        ("1ª parcela já foi paga?", "não", '"sim,não"', "sim: a 1ª entra como Pago; as demais como Pendente."),
+    ]
+    ref = {}
+    for i, (rot, val, lista_dv, dica) in enumerate(campos):
+        r = 5 + i
+        ws.row_dimensions[r].height = 22
+        put(ws, f"B{r}", rot, font=fnt(10, color=P["suave"]), fill_=CARD, align=ALIGN_L)
+        put(ws, f"C{r}", val, font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_L,
+            border=Border(bottom=side(P["destaque"])))
+        ref[rot] = f"$C${r}"
+        if lista_dv:
+            dv = DataValidation(type="list", formula1=lista_dv, allow_blank=True, showErrorMessage=lista_dv.startswith('"'))
+            if dica:
+                dv.showInputMessage, dv.prompt = True, dica
+            ws.add_data_validation(dv)
+            dv.add(f"C{r}")
+    ws[ref["Valor (R$)"].replace("$", "")].number_format = FMT_MOEDA
+    ws[ref["Data da 1ª parcela"].replace("$", "")].number_format = FMT_DATA
+    dvn = DataValidation(type="whole", operator="between", formula1="1", formula2="60", showErrorMessage=True,
+                         error="Use de 1 a 60.", errorTitle="Nº de parcelas")
+    ws.add_data_validation(dvn)
+    dvn.add(ref["Nº de parcelas / meses"].replace("$", ""))
+    modo, dsc, val, tv, nn, d1 = (ref[k] for k in ("Modo", "Descrição", "Valor (R$)", "O valor informado é", "Nº de parcelas / meses", "Data da 1ª parcela"))
+    r0 = 5 + len(campos) + 1
+    put(ws, f"B{r0}", "RESUMO", font=fnt(10, True, P["suave"]))
+    parcela_f = f'IF({modo}="Repetir todo mês",{val},IF({tv}="Total da compra",ROUND({val}/MAX(1,{nn}),2),{val}))'
+    resumo = [("Valor de cada parcela", f"={parcela_f}", FMT_MOEDA),
+              ("Total", f'=IF(AND({modo}="Parcelado",{tv}="Total da compra"),{val},{parcela_f}*{nn})', FMT_MOEDA),
+              ("Última parcela em", f'=IFERROR(DATE(YEAR({d1}),MONTH({d1})+{nn}-1,1),"")', FMT_COMPETENCIA)]
+    for i, (rot, f, fmt_) in enumerate(resumo):
+        r = r0 + 1 + i
+        put(ws, f"B{r}", rot, font=fnt(10, color=P["suave"]), fill_=CARD, align=ALIGN_L)
+        put(ws, f"C{r}", f, font=fnt(11, True), fill_=CARD, fmt=fmt_, align=ALIGN_L)
+    put(ws, f"B{r0 + 5}", '=HYPERLINK("#\'Mês\'!A1","⌂  Mês")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
+    PC = 5   # bloco a partir da coluna E
+    NPARC = 60
+    for j, h in enumerate(COLS_BLOCO):
+        ws.column_dimensions[CL(PC + j)].width = LARG_BLOCO[h]
+        ws.cell(4, PC + j, h)
+    estilo_cabecalho(ws, 4, PC, PC + len(COLS_BLOCO) - 1)
+    put(ws, f"{CL(PC)}2", '=HYPERLINK(' + D["_link_nova"] + ',"✚  Colar aqui: primeira linha livre de Lançamentos")',
+        font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
+    ws.merge_cells(f"{CL(PC)}2:{CL(PC + 4)}2")
+    estilo_corpo(ws, 5, 4 + NPARC, PC, PC + len(COLS_BLOCO) - 1, fill_=CARD2)
+    at_de = lambda col: f'IFERROR(INDEX(tbAtalhos[{col}],MATCH({dsc},tbAtalhos[Descrição],0))&"","")'
+    esc = lambda campo, col: f'IF({ref[campo]}<>"",{ref[campo]},{at_de(col)})'
+    for i in range(1, NPARC + 1):
+        r = 4 + i
+        on = f"{i}<={nn}"
+        mes_i = f"MONTH({d1})+{i - 1}"
+        tipo_i = f'IF({ref["Tipo"]}<>"",{ref["Tipo"]},IFERROR(INDEX(tbAtalhos[Tipo],MATCH({dsc},tbAtalhos[Descrição],0))&"","{tipo_padrao}"))'
+        valor_i = (f'IF({modo}="Repetir todo mês",{val},IF({tv}="Total da compra",IF({i}<{nn},ROUND({val}/{nn},2),'
+                   f'ROUND({val}-ROUND({val}/{nn},2)*({nn}-1),2)),{val}))')
+        data_i = f'DATE(YEAR({d1}),{mes_i},MIN(DAY({d1}),DAY(EOMONTH(DATE(YEAR({d1}),{mes_i},1),0))))'
+        cat_i = esc("Categoria (vazio = do favorito)", "Categoria")
+        pote_i = esc("Pote (vazio = do favorito)", "Pote")
+        mapa = {
+            "Data": f'=IF({on},{data_i},"")', "Vencimento": f'=IF({on},{data_i},"")',
+            "Descrição": f'=IF({on},{dsc},"")',
+            "Valor": f'=IF({on},{valor_i},"")',
+            "Tipo": f'=IF({on},{tipo_i},"")',
+            "Categoria": f'=IF({on},{cat_i},"")',
+            "Situação": f'=IF({on},IF(AND({i}=1,{ref["1ª parcela já foi paga?"]}="sim"),IF({tipo_i}="Receita","Recebido","Pago"),"Pendente"),"")',
+            "Pote": f'=IF({on},IF({pote_i}<>"",{pote_i},IFERROR(INDEX(tbCatDespesa[Fundo padrão],MATCH({cat_i},tbCatDespesa[Categoria de gasto],0))&"","")),"")',
+            "Quem": f'=IF({on},IF({esc("Quem", "Quem")}<>"",{esc("Quem", "Quem")},QuemPadrao),"")',
+            "Conta": f'=IF({on},{esc("Conta / cartão", "Conta")},"")',
+            "Forma de pagamento": f'=IF({on},{esc("Forma de pagamento", "Forma de pagamento")},"")',
+            "Parcela": f'=IF(AND({on},{modo}="Parcelado"),"{i}/"&{nn},"")',
+            "Descontar de": '=""',
+        }
+        for j, h in enumerate(COLS_BLOCO):
+            cc = ws.cell(r, PC + j, mapa[h])
+            if h in ("Data", "Vencimento"):
+                cc.number_format = FMT_DATA
+            elif h == "Valor":
+                cc.number_format, cc.alignment = FMT_MOEDA, ALIGN_R
+            elif h == "Parcela":
+                cc.alignment = ALIGN_C
+    ws.freeze_panes = "A5"
+
+
     # ---------------------------------------------------------------- Caderno do mês (o Painel Mensal)
     ws = ws_cad
     lc = D["_col_lanc"]
@@ -2130,8 +2252,7 @@ def construir(D, caminho):
         ws.merge_cells(f"J{pr}:K{pr}")
         pr += 1
     pr += 1
-    ln0, ln1 = D["_linhas_novas"]
-    for rot_, alvo in [("✚  Novo lançamento", f'"#Lancamentos!B"&({ln0}+COUNTA(Lancamentos!${lc["Descrição"]}${ln0}:${lc["Descrição"]}${ln1}))'),
+    for rot_, alvo in [("✚  Novo lançamento", D["_link_nova"]), ("⟳  Parcelar", '"#Parcelar!A1"'),
                        ("◉  Investimentos", '"#Investimentos!A1"'), ("◎  Planos 1 e 2", '"#Planos!A1"'),
                        ("▦  Visão do ano", '"#\'Visão do ano\'!A1"')]:
         put(ws, f"J{pr}", f'=HYPERLINK({alvo},"{rot_}")', font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
@@ -2228,6 +2349,8 @@ def construir(D, caminho):
         corr.append(PEDIDO_TOPO)
     if not D.get("exemplo") and not any((c[0] or "").startswith(PEDIDO_ATALHO[0][:40]) for c in corr):
         corr.append(PEDIDO_ATALHO)
+    if not D.get("exemplo") and not any((c[0] or "").startswith(PEDIDO_AUTONOMIA[0][:40]) for c in corr):
+        corr.append(PEDIDO_AUTONOMIA)
     corr = corr or [(None, None, None)]
     HCo = 5
     for j, h in enumerate(["Pedido", "Status", "Como ficou"]):
@@ -2758,7 +2881,7 @@ def construir(D, caminho):
                                                                         font=Font(color="FF" + P["positivo"], bold=True)))
     put(ws, f"B{HP - 1}", f"PLANO 1 — PROJEÇÃO DE {NP1} MESES (juro líquido reinvestido + aporte todo mês)", font=fnt(10, True, P["suave"]))
 
-    for w in (ws_cad, ws_lanc, ws_rev, ws_ano, ws_p1, ws_inv, ws_at, ws_corr, ws_cfg):
+    for w in (ws_cad, ws_lanc, ws_parc, ws_rev, ws_ano, ws_p1, ws_inv, ws_at, ws_corr, ws_cfg):
         if w is None:
             continue
         w.page_setup.orientation = "landscape"
@@ -2768,7 +2891,7 @@ def construir(D, caminho):
         w.sheet_properties.pageSetUpPr.fitToPage = True
         w.page_margins.left = w.page_margins.right = 0.3
 
-    cores_guia = [(ws_cad, P["destaque"]), (ws_corr, P["alerta"]), (ws_lanc, P["positivo"]), (ws_inv, P["positivo"]),
+    cores_guia = [(ws_cad, P["destaque"]), (ws_corr, P["alerta"]), (ws_lanc, P["positivo"]), (ws_parc, P["roxo"]), (ws_inv, P["positivo"]),
                   (ws_p1, P["destaque"]), (ws_ano, P["roxo"]), (ws_rev, P["negativo"]), (ws_at, P["roxo"]),
                   (ws_cfg, P["suave"]), (ws_calc, P["borda"])]
     for w, cor in cores_guia:

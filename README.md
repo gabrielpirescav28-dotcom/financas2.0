@@ -12,7 +12,7 @@
 |---|---|
 | Gastou ou recebeu | Em **Lançamentos**, clique em **✚ Lançar algo novo**: Data (`Alt+↓` Enter = hoje), Descrição e Valor. O resto se preenche. |
 | Pagou uma conta | Na aba **Mês**, clique no **✎** da linha: você cai na Situação dela em Lançamentos. Troque para **Pago** e volte pelo **📒 Mês**. (Ou use a lista de Pendentes no topo de Lançamentos.) |
-| Compra parcelada | Lance só a 1ª parcela com `1/10` na coluna Parcela. As outras entram como Pendente na próxima atualização. |
+| Compra parcelada | Aba **Parcelar**: preencha a compra, copie o bloco da direita e cole só os valores (Ctrl+Shift+V) na linha livre de Lançamentos (o ✚ leva até ela). |
 | Descontar de alguém | Situação **Descontar Depois** e o nome em **Descontar de**. A aba Mês mostra quanto ficou para cada pessoa (só informação). |
 | Aplicou | Uma linha em **Investimentos**: Data, Banco, % do CDI e Aplicado. |
 | Mudou a Selic | Uma linha no **Histórico do CDI**, na aba Planos. O que já rendeu não muda. |
@@ -24,7 +24,8 @@
 |---|---|
 | **Mês** | O mês de trabalho: receitas, gastos fixos e extras, resumo, conferência, próximos vencimentos, Descontar Depois por pessoa e semáforo. **É aqui que se troca o mês.** |
 | **Correções IA** | Os seus pedidos: você escreve, a IA implementa, marca **FEITO ✔** e explica em **Como ficou**. |
-| **Lancamentos** | Tabela `tbLancamentos`. No topo, o que está Pendente até o fim do mês que vem; depois 20 linhas em branco para lançar; depois o histórico, do mais recente para o mais antigo. |
+| **Lancamentos** | Tabela `tbLancamentos`. No topo, o que está Pendente até o fim do mês que vem; depois 40 linhas em branco para lançar; depois o histórico, do mais recente para o mais antigo. |
+| **Parcelar** | Gera as linhas de uma compra parcelada (ou que se repete) para colar em Lançamentos. |
 | **Investimentos** | Potes 80/10/7/3 (guardado × gasto) no topo e, embaixo, uma linha por aplicação, com saldo, IR e líquido calculados todo dia. |
 | **Planos** | Premissas, Histórico do CDI, Plano 1 (independência pelos juros, 48 meses) e Plano 2 (renda durável: carreira + aluguéis + juros, 96 meses). |
 | **Visão do ano** | Só consulta: orçamento do mês, o ano por categoria (com minigráficos) e o histórico de todos os meses (**Conferido em**). |
@@ -38,7 +39,7 @@
 - **Regra dos totais:** entra no mês o que tem **Conta no mês? = sim**, ou seja, receita *Recebida* e gasto *Pago* ou *Descontar Depois*. *Pendente*, *Investimento* e parcelas projetadas ficam fora. Não há saldo acumulado; o que vale é o **Saldo livre do mês** = Resultado − Aporte + Resgate.
 - **Aporte** = aplicações novas da aba Investimentos no mês, sem "Reaplicação" e sem linha de "correção". Confere com a Tela do Dinheiro.
 - **Categoria ≠ Pote:** a categoria diz *com o quê*; o pote diz *de qual dinheiro*. Um gasto sem pote recebe o **Fundo padrão** da categoria.
-- **Contas fixas e parcelas previstas:** a cada atualização entram como Pendente as contas dos favoritos com Recorrente? = sim, para o mês atual e o seguinte. Entram só as que aparecem uma vez por mês; supermercado, Uber e afins ficam de fora. Entram também as parcelas restantes de compras parceladas recentes. Uma prevista que ficou sobrando, porque você lançou a conta numa linha nova, é retirada.
+- **Contas fixas e parcelas previstas:** a cada atualização entram como Pendente as contas dos favoritos com Recorrente? = sim, do mês atual até dez/2027 (as mais distantes ficam no fim da tabela). Entram só as que aparecem uma vez por mês; supermercado, Uber e afins ficam de fora. Entram também as parcelas restantes de compras parceladas recentes. Uma prevista que ficou sobrando, porque você lançou a conta numa linha nova, é retirada.
 - **Investimentos:** cada aplicação rende pelo **Histórico do CDI** × % do CDI em dias úteis, com IR regressivo (22,5% até 180 dias → 15% após 720). As linhas vindas do app partem da posição calculada pelo app (**Base**).
 
 ## Arquivos
@@ -55,7 +56,7 @@
 - `.xlsx` sem macros. As fórmulas estão em inglês, e o Excel em português as traduz.
 - Funções compatíveis: SUMIFS, SUMPRODUCT, INDEX/MATCH, SMALL/LARGE em fórmula matricial, LOOKUP, IFERROR, OFFSET, NETWORKDAYS. Nada de matriz dinâmica.
 - Verificação feita com os dados reais:
-  - **Recálculo:** no LibreOffice, nenhuma das 16.831 fórmulas dá erro.
+  - **Recálculo:** no LibreOffice, nenhuma das 18.452 fórmulas dá erro.
   - **Histórico:** bate com o "Resumo por mês" do app nos 54 meses. As únicas diferenças são correções pedidas depois da exportação: a conta de gás de julho paga e as linhas lançadas em setembro.
   - **Descontar Depois de set/2026:** o total por pessoa confere com os acertos do app.
   - **Selic nova:** uma taxa nova no Histórico do CDI não muda o saldo já conquistado.
