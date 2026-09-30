@@ -15,7 +15,7 @@
 | Compra parcelada | Aba **Parcelar**: preencha a compra, copie o bloco da direita e cole só os valores (Ctrl+Shift+V) na linha livre de Lançamentos (o ✚ leva até ela). |
 | Descontar de alguém | Situação **Descontar Depois** e o nome em **Descontar de**. A aba Mês mostra quanto ficou para cada pessoa (só informação). |
 | Aplicou | Uma linha em **Investimentos**: Data, Banco, % do CDI e Aplicado. |
-| Mudou a Selic | Uma linha no **Histórico do CDI**, na aba Planos. O que já rendeu não muda. |
+| Mudou a Selic | Uma linha no **Histórico do CDI**, na aba Planos (data do dia seguinte ao Copom, CDI ≈ Selic − 0,10). O que já rendeu não muda. |
 | Quer mudar algo na planilha | Escreva o pedido em **Correções IA**. |
 
 ## Abas
@@ -40,6 +40,7 @@
 - **Aporte** = aplicações novas da aba Investimentos no mês, sem "Reaplicação" e sem linha de "correção". Confere com a Tela do Dinheiro.
 - **Categoria ≠ Pote:** a categoria diz *com o quê*; o pote diz *de qual dinheiro*. Um gasto sem pote recebe o **Fundo padrão** da categoria.
 - **Contas fixas e parcelas previstas:** a cada atualização entram como Pendente as contas dos favoritos com Recorrente? = sim, do mês atual até dez/2027 (as mais distantes ficam no fim da tabela). Entram só as que aparecem uma vez por mês; supermercado, Uber e afins ficam de fora. Entram também as parcelas restantes de compras parceladas recentes. Uma prevista que ficou sobrando, porque você lançou a conta numa linha nova, é retirada.
+- **Carteira:** mostra o que rendeu no mês, o previsto no mês cheio (bruto e líquido), a taxa ao mês, o % do CDI médio e a rentabilidade média ao ano. O pote Investimento é a carteira líquida menos os outros potes.
 - **Investimentos:** cada aplicação rende pelo **Histórico do CDI** × % do CDI em dias úteis, com IR regressivo (22,5% até 180 dias → 15% após 720). As linhas vindas do app partem da posição calculada pelo app (**Base**).
 
 ## Arquivos
@@ -56,7 +57,7 @@
 - `.xlsx` sem macros. As fórmulas estão em inglês, e o Excel em português as traduz.
 - Funções compatíveis: SUMIFS, SUMPRODUCT, INDEX/MATCH, SMALL/LARGE em fórmula matricial, LOOKUP, IFERROR, OFFSET, NETWORKDAYS. Nada de matriz dinâmica.
 - Verificação feita com os dados reais:
-  - **Recálculo:** no LibreOffice, nenhuma das 18.452 fórmulas dá erro.
+  - **Recálculo:** no LibreOffice, nenhuma das 18.538 fórmulas dá erro.
   - **Histórico:** bate com o "Resumo por mês" do app nos 54 meses. As únicas diferenças são correções pedidas depois da exportação: a conta de gás de julho paga e as linhas lançadas em setembro.
   - **Descontar Depois de set/2026:** o total por pessoa confere com os acertos do app.
   - **Selic nova:** uma taxa nova no Histórico do CDI não muda o saldo já conquistado.

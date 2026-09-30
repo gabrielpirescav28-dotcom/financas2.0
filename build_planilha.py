@@ -260,6 +260,14 @@ PEDIDO_AUTONOMIA = ("Menos dependência de IA: atalho na aba Mês, contas fixas 
                     "já estão como Pendente de outubro/2026 a dezembro/2027; as dos meses depois do próximo ficam no fim da tabela. "
                     "A aba Parcelar voltou: preencha a compra, copie o bloco da direita e cole só os valores (Ctrl+Shift+V) na linha "
                     "livre de Lançamentos (o ✚ leva até ela). Lançamentos tem 40 linhas em branco; quando acabarem, o ✚ leva ao fim da tabela.")
+PEDIDO_CARTEIRA = ("Carteira: rentabilidade sobre o aplicado, potes diferentes, faltam métricas de rendimento mensal e CDI errado "
+                   "(pedido no chat, 30/09/2026)", "FEITO ✔",
+                   "CDI corrigido: o Histórico do CDI (aba Planos) agora segue as decisões do Copom (hoje 13,65% ao ano, desde "
+                   "17/09/2026); cada taxa vale a partir da sua data, então mudar a Selic não altera o que já rendeu. Na Carteira "
+                   "entraram: Rendeu neste mês, Previsto no mês cheio (bruto e líquido de IR), Taxa ao mês, % do CDI médio e "
+                   "Rentabilidade média ao ano (comparável ao CDI) no lugar da rentabilidade acumulada. O pote Investimento agora é "
+                   "a carteira líquida menos os outros potes, então o total dos potes sempre bate com a carteira. A aba Mês mostra "
+                   "quanto os investimentos renderam no mês.")
 PEDIDO_TOPO = ("Não ter que ir até a última linha nem procurar a conta pendente para mudar para Pago (pedido no chat, 30/09/2026)",
                "FEITO ✔",
                "Lançamentos agora abre com a lista do que está Pendente até o fim do mês que vem, pela data de vencimento "
@@ -274,10 +282,15 @@ PEDIDO_JEITO_PLINIO = ("Deixar a planilha no jeito do Plínio: como eu visualizo
                        "fechamento do mês no Histórico.")
 # Colunas da tabela de Investimentos (as do app + a posição que o app calculou, de onde a linha segue rendendo)
 CAB_INV = ["Data", "Banco", "% do CDI", "Aplicado", "Dias", "Isento", "Resgatado", "Alíquota IR", "Saldo hoje",
-           "IR", "Líquido", "Vencimento", "Observação", "Base (app)", "Data da base"]
+           "IR", "Líquido", "Vencimento", "Observação", "Base (app)", "Data da base", "Rendeu no mês"]
 # Plano 1 e Plano 2 (Finanças Família 3.0): os valores pessoais vêm de config_pessoal.json → "planos";
 # sem ele, valores genéricos de exemplo. Depois ficam na própria planilha (tbPremissas / tbCarreira).
-PLANOS_PADRAO = dict(cdi=0.139, rotulo_renda="Renda a cobrir com os juros", renda=6000.0, aporte=3000.0,
+# CDI ≈ Selic − 0,10 p.p., valendo a partir do dia seguinte à reunião do Copom (dado público; edite na aba Planos)
+CDI_HISTORICO = [(dt.date(2024, 12, 12), 0.1215), (dt.date(2025, 1, 30), 0.1315), (dt.date(2025, 3, 20), 0.1415),
+                 (dt.date(2025, 5, 8), 0.1465), (dt.date(2025, 6, 19), 0.1490), (dt.date(2026, 3, 19), 0.1465),
+                 (dt.date(2026, 4, 30), 0.1440), (dt.date(2026, 6, 18), 0.1415), (dt.date(2026, 8, 6), 0.1390),
+                 (dt.date(2026, 9, 17), 0.1365)]
+PLANOS_PADRAO = dict(cdi=0.1365, rotulo_renda="Renda a cobrir com os juros", renda=6000.0, aporte=3000.0,
                      aporte_modo="Planejado", meta=15000.0, rotulo_alugueis="Aluguéis / outras rendas (por mês)",
                      alugueis=0.0, carreira=[(None, "Salário hoje", 7000.0), (2030, "Promoção (exemplo)", 8500.0)])
 
@@ -287,6 +300,7 @@ def planos_padrao(exemplo=False):
     if not exemplo:
         pl.update({k: v for k, v in (_CFG.get("planos") or {}).items() if v is not None})
     pl["carreira"] = [tuple(x) for x in pl["carreira"]]
+    pl["cdi_hist"] = list(CDI_HISTORICO)
     return pl
 
 
@@ -297,7 +311,7 @@ def investimentos_do_app(cab, linhas, data_pos):
         d = dict(zip(cab, r))
         d["Base (app)"] = None if str(d.get("Resgatado") or "").lower() == "sim" else d.get("Saldo hoje")
         d["Data da base"] = data_pos if d["Base (app)"] else None
-        out.append([d.get(h) if h not in ("Dias", "Alíquota IR", "Saldo hoje", "IR", "Líquido") else None for h in CAB_INV])
+        out.append([d.get(h) if h not in ("Dias", "Alíquota IR", "Saldo hoje", "IR", "Líquido", "Rendeu no mês") else None for h in CAB_INV])
     return out
 
 
@@ -770,7 +784,7 @@ def importar_propria(caminho):
         linhas_inv = [[_data(r[h]) if isinstance(r[h], (dt.datetime, dt.date)) else r[h] for h in cab_inv]
                       for r in inv if r.get("Data") or r.get("Aplicado")]
         if "Base (app)" in cab_inv:
-            investimentos = [[None if h in ("Dias", "Alíquota IR", "Saldo hoje", "IR", "Líquido") else
+            investimentos = [[None if h in ("Dias", "Alíquota IR", "Saldo hoje", "IR", "Líquido", "Rendeu no mês") else
                               dict(zip(cab_inv, r)).get(h) for h in CAB_INV] for r in linhas_inv]
         else:
             investimentos = investimentos_do_app(cab_inv, linhas_inv, data_pos)
@@ -785,8 +799,12 @@ def importar_propria(caminho):
         if k in rotulos and pr_.get("Premissa"):
             planos[rotulos[k]] = pr_["Premissa"]
     _, cdis = _ler_tabela(wb, "tbCDI")
-    if cdis:
-        planos["cdi_hist"] = [(_data(c["A partir de"]), c["CDI ao ano"]) for c in cdis if c.get("A partir de") and c.get("CDI ao ano")]
+    if cdis:   # o que você acrescentou fica; a linha provisória antiga (01/01/2020) dá lugar ao histórico do Copom
+        seus = {_data(c["A partir de"]): c["CDI ao ano"] for c in cdis if c.get("A partir de") and c.get("CDI ao ano")
+                and _data(c["A partir de"]) != dt.date(2020, 1, 1)}
+        base = dict(CDI_HISTORICO)
+        base.update(seus)
+        planos["cdi_hist"] = sorted(base.items())
     _, car = _ler_tabela(wb, "tbCarreira")
     if car:
         planos["carreira"] = [(_data(c["A partir de"]) if c.get("A partir de") else None, c.get("Posto / etapa"), c.get("Salário"))
@@ -2187,6 +2205,7 @@ def construir(D, caminho):
     linha_painel("Total investido", "=Calc!B38")
     linha_painel("IR se resgatar hoje", "=Calc!B39")
     linha_painel("Investimento líquido", "=Calc!B40")
+    linha_painel("Rendeu nos investimentos (mês atual)", "=SUM(tbInvestimentos[Rendeu no mês])", cor=P["positivo"])
     linha_painel("A pagar (previsto, fora do total)", "=Calc!B42", cor=P["alerta"])
     linha_painel("A receber (previsto)", "=Calc!B43", cor=P["alerta"])
     for ref_ in (ref_res, ref_livre):
@@ -2292,6 +2311,13 @@ def construir(D, caminho):
             ws[f"{colx}{r}"].fill = CARD2
             ws[f"{colx}{r}"].font = fnt(10, True, P["destaque"])
         ws[f"B{r}"].font = fnt(11, True)
+    # Correção IA ("os potes estão com valores diferentes"): o pote Investimento fica com o que sobra da carteira
+    # líquida depois dos outros potes, então o total dos potes sempre bate com a carteira. Os outros você digita.
+    i_inv = next((i for i, (pote, _, _) in enumerate(potes) if "invest" in str(pote).lower()), None)
+    if i_inv is not None:
+        outros = [f"D{HP + 1 + i}" for i in range(len(potes)) if i != i_inv]
+        c_inv = ws.cell(HP + 1 + i_inv, 4, "=MAX(0,SUM(tbInvestimentos[Líquido])" + ("-" + "-".join(outros) if outros else "") + ")")
+        c_inv.fill, c_inv.font = CARD, fnt(10, True, P["positivo"])
     tp = ultp + 1
     ws.cell(tp, 2, "Total")
     ws.cell(tp, 3, "=SUBTOTAL(109,tbPotesSaldo[% alvo])")
@@ -2310,8 +2336,8 @@ def construir(D, caminho):
     ws.conditional_formatting.add(f"F{HP + 1}:F{ultp}", FormulaRule(formula=[f"ABS(F{HP + 1})>0.05"], font=Font(color="FF" + P["alerta"], bold=True)))
     ws.conditional_formatting.add(f"C{tp}", FormulaRule(formula=[f"ROUND(C{tp},4)<>1"], font=Font(color="FF" + P["negativo"], bold=True)))
     dv_lista(ws, "=Potes", f"B{HP + 1}:B{ultp + 20}", msg="Use um pote cadastrado na aba Config.")
-    nota_p = ("Guardado inicial = Alocação por Projeto do Plínio (Manutenção já com o valor corrigido). "
-              "Atualize quando mudar." if not D.get("exemplo") else "Preencha quanto está guardado em cada pote.")
+    nota_p = ("Investimento = carteira líquida − os outros potes (automático). Os outros potes você digita; o total sempre bate "
+              "com a carteira.")
     put(ws, f"B{tp + 2}", nota_p, font=fnt(9, color=P["suave"], italic=True))
     put(ws, f"B{tp + 3}", '="Gastos do ano sem pote: "', font=fnt(9, color=P["suave"]))
     put(ws, f"D{tp + 3}", f'=SUMIFS({L}[Valor],{L}[Pote],"",{L}[Tipo],"<>Receita",{CONTA},{L}[Ano],AnoSelecionado)',
@@ -2351,6 +2377,8 @@ def construir(D, caminho):
         corr.append(PEDIDO_ATALHO)
     if not D.get("exemplo") and not any((c[0] or "").startswith(PEDIDO_AUTONOMIA[0][:40]) for c in corr):
         corr.append(PEDIDO_AUTONOMIA)
+    if not D.get("exemplo") and not any((c[0] or "").startswith(PEDIDO_CARTEIRA[0][:40]) for c in corr):
+        corr.append(PEDIDO_CARTEIRA)
     corr = corr or [(None, None, None)]
     HCo = 5
     for j, h in enumerate(["Pedido", "Status", "Como ficou"]):
@@ -2594,7 +2622,7 @@ def construir(D, caminho):
     ws.column_dimensions["A"].width = 2
     larg_i = {"Data": 12, "Banco": 11, "% do CDI": 10, "Aplicado": 15, "Dias": 7, "Isento": 8, "Resgatado": 10,
               "Alíquota IR": 10, "Saldo hoje": 15, "IR": 12, "Líquido": 15, "Vencimento": 12, "Observação": 40,
-              "Base (app)": 14, "Data da base": 12}
+              "Base (app)": 14, "Data da base": 12, "Rendeu no mês": 14}
     HI = D["_potes_fim"] + 3
     put(ws, f"B{HI - 1}", "APLICAÇÕES — uma linha por aplicação", font=fnt(10, True, P["suave"]))
     ti = lambda c: f"tbInvestimentos[[#This Row],[{c}]]"
@@ -2617,6 +2645,10 @@ def construir(D, caminho):
                        f'{base_i}*EXP({pct_i}*MAX(0,{L_cdi("TODAY()")}-{L_cdi(d0_i)}))))'),
         "IR": f'=IF(N({ti("Saldo hoje")})<=0,0,MAX(0,{ti("Saldo hoje")}-N({ti("Aplicado")}))*N({ti("Alíquota IR")}))',
         "Líquido": f'=N({ti("Saldo hoje")})-N({ti("IR")})',
+        # quanto rendeu desde o dia 1º do mês atual (ou desde a aplicação, se foi aplicada neste mês)
+        "Rendeu no mês": (f'=IF(OR(N({ti("Data")})=0,{ti("Resgatado")}="sim",N({ti("Aplicado")})<0),0,N({ti("Saldo hoje")})-'
+                          f'IF({ti("Data")}>=DATE(YEAR(TODAY()),MONTH(TODAY()),1),N({ti("Aplicado")}),'
+                          f'{base_i}*EXP({pct_i}*({L_cdi("DATE(YEAR(TODAY()),MONTH(TODAY()),1)")}-{L_cdi(d0_i)}))))'),
     }
     larg_potes = [18, 10, 17, 10, 11, 17, 17, 18]          # colunas B–I também servem aos Potes
     for j, h in enumerate(cab_i):
@@ -2627,7 +2659,8 @@ def construir(D, caminho):
         ws.cell(HI, 2 + cab_i.index(h)).fill = fill(misturar(P["roxo"], P["card"], 0.55 if TEMA == "plinio_escuro" else 0.15))
     estilo_corpo(ws, HI + 1, HI + len(inv), 2, ni + 1)
     fm = {"Data": FMT_DATA, "Vencimento": FMT_DATA, "Data da base": FMT_DATA, "% do CDI": FMT_PCT, "Alíquota IR": FMT_PCT,
-          "Aplicado": FMT_MOEDA, "Saldo hoje": FMT_MOEDA, "IR": FMT_MOEDA, "Líquido": FMT_MOEDA, "Base (app)": FMT_MOEDA}
+          "Aplicado": FMT_MOEDA, "Saldo hoje": FMT_MOEDA, "IR": FMT_MOEDA, "Líquido": FMT_MOEDA, "Base (app)": FMT_MOEDA,
+          "Rendeu no mês": FMT_MOEDA}
     for i, row in enumerate(inv):
         r = HI + 1 + i
         for j, (h, v) in enumerate(zip(cab_i, row)):
@@ -2668,23 +2701,42 @@ def construir(D, caminho):
     ws.column_dimensions[CL(cx)].width = 26
     ws.column_dimensions[CL(cx + 1)].width = 19
     put(ws, f"{CL(cx)}4", "CARTEIRA", font=fnt(10, True, P["suave"]))
-    resumo = [("Carteira hoje (bruto)", "=SUM(tbInvestimentos[Saldo hoje])", FMT_MOEDA),
-              ("IR se resgatar hoje", "=SUM(tbInvestimentos[IR])", FMT_MOEDA),
-              ("Líquido", "=SUM(tbInvestimentos[Líquido])", FMT_MOEDA),
-              ("Total aplicado (ativos)", '=SUMIFS(tbInvestimentos[Aplicado],tbInvestimentos[Resgatado],"<>sim")', FMT_MOEDA),
-              ("Rendimento bruto", f"={CL(cx + 1)}6-{CL(cx + 1)}9", FMT_MOEDA),
-              ("Rentabilidade sobre o aplicado", f"=IF({CL(cx + 1)}9>0,{CL(cx + 1)}10/{CL(cx + 1)}9,0)", FMT_PCT),
-              ("CDI hoje (aba Planos)", "=CDI", "0.00%")]
+    vc = lambda r: f"{CL(cx + 1)}{r}"
+    ativos_ap = 'SUMIFS(tbInvestimentos[Aplicado],tbInvestimentos[Resgatado],"<>sim",tbInvestimentos[Aplicado],">0")'
+    anos_cap = ('SUMPRODUCT((tbInvestimentos[Resgatado]<>"sim")*(tbInvestimentos[Aplicado]>0)*tbInvestimentos[Aplicado]'
+                '*(TODAY()-tbInvestimentos[Data])/365)')
+    resumo = [("Carteira hoje (bruto)", "=SUM(tbInvestimentos[Saldo hoje])", FMT_MOEDA),                       # 6
+              ("IR se resgatar hoje", "=SUM(tbInvestimentos[IR])", FMT_MOEDA),                              # 7
+              ("Líquido", "=SUM(tbInvestimentos[Líquido])", FMT_MOEDA),                                     # 8
+              ("Total aplicado (ativos)", "=" + ativos_ap, FMT_MOEDA),                                      # 9
+              ("Rendimento acumulado (bruto)", f"={vc(6)}-{vc(9)}", FMT_MOEDA),                              # 10
+              ("RENDIMENTO NO MÊS", None, None),                                                            # 11
+              ("Rendeu neste mês (até hoje)", "=SUM(tbInvestimentos[Rendeu no mês])", FMT_MOEDA),            # 12
+              ("Previsto no mês cheio (bruto)", f"={vc(6)}*P1TaxaBruta", FMT_MOEDA),                         # 13
+              ("Previsto no mês cheio (líquido de IR)", f"={vc(6)}*P1Taxa", FMT_MOEDA),                      # 14
+              ("Taxa ao mês (bruta)", "=P1TaxaBruta", "0.00%"),                                             # 15
+              ("Taxa ao mês (líquida de IR)", "=P1Taxa", "0.00%"),                                          # 16
+              ("% do CDI médio da carteira", "=P1Pct", FMT_PCT),                                            # 17
+              ("CDI hoje (aba Planos)", "=CDI", "0.00%"),                                 # 18
+              ("Rentabilidade média ao ano", f"=IFERROR({vc(10)}/({anos_cap}),0)", "0.00%")]   # 19
     for i, (rot, f, fmt_) in enumerate(resumo):
         r = 6 + i
         ws.row_dimensions[r].height = 22
+        if f is None:
+            put(ws, f"{CL(cx)}{r}", rot, font=fnt(10, True, P["suave"]), fill_=CARD2, align=ALIGN_L)
+            put(ws, f"{CL(cx + 1)}{r}", None, fill_=CARD2)
+            continue
         put(ws, f"{CL(cx)}{r}", rot, font=fnt(10, color=P["suave"]), fill_=CARD, align=ALIGN_L)
-        put(ws, f"{CL(cx + 1)}{r}", f, font=fnt(11, True, P["positivo"] if i in (0, 2, 4) else P["texto"]),
+        put(ws, f"{CL(cx + 1)}{r}", f, font=fnt(11, True, P["positivo"] if i in (0, 2, 4, 6, 7, 8) else P["texto"]),
             fill_=CARD, fmt=fmt_, align=ALIGN_R)
     area(ws, f"{CL(cx)}5:{CL(cx + 1)}5", fill_=CARD, border=Border(top=side(P["positivo"], "thick")))
+    ws.column_dimensions[CL(cx)].width = 40
+    D["_ref_rendeu_mes"] = f"Investimentos!{vc(12)}"
     D["_ref_invest"] = f"Investimentos!{CL(cx + 1)}8"
-    put(ws, f"{CL(cx)}14", "Reaplicação: escreva \"Reaplicação\" na Observação.", font=fnt(9, color=P["suave"], italic=True))
-    put(ws, f"{CL(cx)}15", "Resgate total: Resgatado = sim · parcial: valor negativo.", font=fnt(9, color=P["suave"], italic=True))
+    put(ws, f"{CL(cx)}21", "Reaplicação: escreva \"Reaplicação\" na Observação.", font=fnt(9, color=P["suave"], italic=True))
+    put(ws, f"{CL(cx)}22", "Resgate total: Resgatado = sim · parcial: valor negativo.", font=fnt(9, color=P["suave"], italic=True))
+    put(ws, f"{CL(cx)}23", "Rentabilidade média ao ano: compare com o CDI (é o rendimento anualizado de cada real aplicado).",
+        font=fnt(9, color=P["suave"], italic=True))
 
     # ---------------------------------------------------------------- Plano 1 e Plano 2 (como na Finanças Família 3.0)
     PL = D["planos"]
@@ -2757,7 +2809,7 @@ def construir(D, caminho):
     # Histórico do CDI: cada linha vale a partir da sua data; o rendimento já conquistado usa a taxa de cada período
     # (Correção IA: "se mudar a Selic, só muda o futuro"). Acumulado = soma de ln(1+CDI diário) por dia útil.
     HCD = 21
-    cdi_hist = PL.get("cdi_hist") or [(dt.date(2020, 1, 1), PL["cdi"])]
+    cdi_hist = PL.get("cdi_hist") or list(CDI_HISTORICO)
     put(ws, f"B{HCD - 1}", "HISTÓRICO DO CDI — mudou a Selic? Acrescente uma linha com a data e a taxa nova (o que já rendeu não muda)",
         font=fnt(10, True, P["suave"]))
     cab_cdi = ["A partir de", "CDI ao ano", "Dias úteis", "Log diário", "Acumulado"]
