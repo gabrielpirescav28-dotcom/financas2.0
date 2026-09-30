@@ -26,10 +26,12 @@ A planilha segue o jeito de visualizar e controlar da **Finanças Família 3.0**
 - **Potes 80 / 10 / 7 / 3.** Investimento, Lazer, Manutenção e Vestimenta, com **Guardado** e **% alvo** editáveis. Ao lado ficam o % real, o desvio e o **gasto no ano / no mês de cada pote**. A barra "guardou × gastou" mostra o dinheiro pelos dois lados. O **reequilíbrio** é só sugestão: some o valor gasto nos potes na proporção do alvo, e você aprova editando o Guardado.
 - **Categoria ≠ Pote.** A categoria diz *com o quê*; o pote (fundo) diz *de qual dinheiro*. Cada categoria tem um **Fundo padrão** (aba Config), e um gasto sem pote recebe o fundo da categoria, a mesma regra da Base_Dados.
 - **Nada fica em Outros.** A aba **Categorizar** junta, por descrição, tudo o que está em Outros ou Sem categoria, com uma sugestão. Escolheu a **Categoria certa**, e todos os lançamentos com essa descrição (e o favorito) mudam juntos; o Pote segue o fundo padrão.
-- **Plano 1 e Plano 2**, como na Finanças Família 3.0.
+- **Plano 1 e Plano 2**, como na Finanças Família 3.0, numa aba só (**Planos**).
   - **Plano 1:** quando o juro líquido da carteira cobre uma renda mensal. Premissas em latão: CDI, renda a cobrir, aporte (planejado ou média real de 3 meses). Mostra % do CDI médio, IR médio real, patrimônio-alvo, % do caminho e a projeção de 48 meses até INDEPENDENTE.
   - **Plano 2:** renda durável = salário pela carreira (tabela editável) + aluguéis + juro líquido, com projeção de 96 meses até a meta.
 - **Investimentos vivos.** Uma linha por aplicação (Data, Banco, % do CDI, Aplicado). Dias, Alíquota IR (regressiva: 22,5% até 180 dias → 15% após 720), Saldo hoje (CDI × % do CDI em dias úteis), IR e Líquido se calculam sozinhos. As linhas vindas do app partem da posição calculada pelo app (**Base**) e seguem rendendo.
+- **Histórico do CDI** (aba Planos): cada taxa vale a partir da sua data. Mudou a Selic? Acrescente uma linha; o que já rendeu não muda.
+- **Descontar Depois por pessoa.** Com Situação = Descontar Depois, o nome vai em **Descontar de** (visível logo depois de Quem). A aba **Acertos** soma por pessoa o que foi lançado no mês do Caderno, lista lançamento a lançamento, faz o rateio da casa e desconta os **Recebidos**.
 - **Mapa completo de categorias.** A aba Atalhos (Favoritos) tem **todas as descrições do histórico** → Tipo, Categoria, Pote. Digitou uma descrição conhecida, e o resto se preenche.
 - **🤖 Correções IA.** É o seu canal de pedidos, como a Melhorias IA: você escreve o **Pedido**, a IA implementa, marca **FEITO ✔** e explica em **Como ficou**. Os pedidos são mantidos quando a planilha é gerada de novo.
 - **Quem.** Sempre a pessoa definida em `config_pessoal.json` (hoje, uma só), preenchida sozinha (Correção IA #1).
@@ -73,13 +75,12 @@ A planilha com dados reais, a exportação do app e as prévias com dados reais 
 | **Potes** | Guardado × gasto dos potes 80/10/7/3 e sugestão de reequilíbrio. |
 | **Anual** | Categorias × 12 meses do ano, com minigráficos. |
 | **Historico** | Todos os meses: receitas, gasto fixo, gasto extra, resultado, aporte, resgate, saldo livre, % comprometido e **Conferido em**. |
-| **Plano 1** | Premissas e independência pelos juros (projeção de 48 meses). |
-| **Plano 2** | Renda durável: carreira + aluguéis + juros (projeção de 96 meses). |
+| **Planos** | Premissas, Histórico do CDI, Plano 1 (independência pelos juros, 48 meses) e Plano 2 (renda durável: carreira + aluguéis + juros, 96 meses). |
 | **Investimentos** | Uma linha por aplicação; saldo, IR e líquido calculados todo dia. |
-| **Acertos** | Valores a cobrar, com o rateio passo a passo. |
+| **Acertos** | Descontar Depois do mês por pessoa, recebidos e o rateio passo a passo. |
 | **Atalhos** | Favoritos / mapa Descrição → Tipo, Categoria e Pote. |
 | **Correções IA** | Os seus pedidos para a IA (2ª aba). |
-| **Config** | Listas editáveis: categorias (com Fundo padrão), potes, Quem, contas, cartões, formas, tipos, situações e anos. |
+| Config (oculta) | Listas editáveis: categorias (com Fundo padrão), potes, Quem, contas, cartões, formas, tipos, situações e anos. |
 | Calc (oculta) | Cálculos auxiliares. |
 
 ## Regra que decide o que entra nos totais
