@@ -11,7 +11,7 @@
 | Aconteceu | O que fazer |
 |---|---|
 | Gastou ou recebeu | Em **Lançamentos**, clique em **✚ Lançar algo novo**: Data (`Alt+↓` Enter = hoje), Descrição e Valor. O resto se preenche. |
-| Pagou uma conta | Ela está no **topo de Lançamentos** (lista do que está Pendente, pelo vencimento, atrasadas primeiro). Troque para **Pago** ali mesmo e corrija o valor, se mudou. |
+| Pagou uma conta | Na aba **Mês**, clique no **✎** da linha: você cai na Situação dela em Lançamentos. Troque para **Pago** e volte pelo **📒 Mês**. (Ou use a lista de Pendentes no topo de Lançamentos.) |
 | Compra parcelada | Lance só a 1ª parcela com `1/10` na coluna Parcela. As outras entram como Pendente na próxima atualização. |
 | Descontar de alguém | Situação **Descontar Depois** e o nome em **Descontar de**. A aba Mês mostra quanto ficou para cada pessoa (só informação). |
 | Aplicou | Uma linha em **Investimentos**: Data, Banco, % do CDI e Aplicado. |
@@ -55,7 +55,7 @@
 - `.xlsx` sem macros. As fórmulas estão em inglês, e o Excel em português as traduz.
 - Funções compatíveis: SUMIFS, SUMPRODUCT, INDEX/MATCH, SMALL/LARGE em fórmula matricial, LOOKUP, IFERROR, OFFSET, NETWORKDAYS. Nada de matriz dinâmica.
 - Verificação feita com os dados reais:
-  - **Recálculo:** no LibreOffice, nenhuma das 16.626 fórmulas dá erro.
+  - **Recálculo:** no LibreOffice, nenhuma das 16.831 fórmulas dá erro.
   - **Histórico:** bate com o "Resumo por mês" do app nos 54 meses. As únicas diferenças são correções pedidas depois da exportação: a conta de gás de julho paga e as linhas lançadas em setembro.
   - **Descontar Depois de set/2026:** o total por pessoa confere com os acertos do app.
   - **Selic nova:** uma taxa nova no Histórico do CDI não muda o saldo já conquistado.

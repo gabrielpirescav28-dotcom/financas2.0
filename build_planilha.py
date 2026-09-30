@@ -249,6 +249,11 @@ PEDIDO_UNIR_ABAS = ("Unir abas e facilitar o preenchimento: muitos detalhes de p
                     "Planos e Visão do ano (Orçamento + Anual + Histórico); Categorizar fica até terminar. Saíram Contas do mês, "
                     "Parcelar e Acertos: contas fixas e parcelas já entram como Pendente, e o Descontar Depois virou só informação na "
                     "aba Mês. Caixas de explicação e textos longos foram retirados.")
+PEDIDO_ATALHO = ("Mudar Pendente para Pago a partir da aba Mês (alternativa 2: atalho em cada linha; pedido no chat, 30/09/2026)",
+                 "FEITO ✔",
+                 "Cada lançamento dos blocos da aba Mês tem um ✎ à direita. Clicou, vai direto para a Situação daquela conta em "
+                 "Lançamentos: troque para Pago (ou corrija o valor) e clique em 📒 Mês, fixo no topo, para voltar. Os dados "
+                 "continuam num lugar só (Lançamentos); o Mês só mostra.")
 PEDIDO_TOPO = ("Não ter que ir até a última linha nem procurar a conta pendente para mudar para Pago (pedido no chat, 30/09/2026)",
                "FEITO ✔",
                "Lançamentos agora abre com a lista do que está Pendente até o fim do mês que vem, pela data de vencimento "
@@ -1930,14 +1935,14 @@ def construir(D, caminho):
     ws = ws_cad
     lc = D["_col_lanc"]
     pintar_fundo(ws, 16, 3)
-    larguras(ws, {"A": 2, "B": 13.5, "C": 30, "D": 10, "E": 18, "F": 14, "G": 18, "H": 22, "I": 3, "J": 33, "K": 18, "L": 2, "N": 14, "O": 6})
+    larguras(ws, {"A": 2, "B": 13.5, "C": 30, "D": 10, "E": 18, "F": 14, "G": 18, "H": 22, "I": 4.5, "J": 33, "K": 18, "L": 2, "N": 14, "O": 6})
     ws.column_dimensions["N"].hidden = True
     ws.column_dimensions["O"].hidden = True
     ws.row_dimensions[1].height = 10
     ws.row_dimensions[2].height = 30
     ws.row_dimensions[3].height = 28
     put(ws, "B2", "Mês", font=fnt(20, True), align=Alignment(vertical="bottom"))
-    put(ws, "B3", "O mês de trabalho: receitas, gastos fixos e extras. Pendente aparece, mas só soma quando virar Pago.",
+    put(ws, "B3", "O mês de trabalho. Para mudar uma conta (Pendente → Pago, valor), clique no ✎ da linha; para voltar, 📒 Mês no topo de Lançamentos.",
         font=fnt(9, color=P["suave"]), align=Alignment(vertical="center"))
     put(ws, "J2", "MÊS DE TRABALHO  (todo o resto segue este mês)", font=fnt(9, True, P["suave"]), align=Alignment(vertical="bottom", indent=1))
     ws.merge_cells("J2:K2")
@@ -1996,6 +2001,9 @@ def construir(D, caminho):
                     c_.number_format = FMT_DATA
                 elif rot == "Valor":
                     c_.number_format = FMT_MOEDA
+            # ✎ leva direto à Situação desse lançamento em Lançamentos (Correção IA: mudar Pendente → Pago sem procurar)
+            put(ws, f"I{r}", f'=IF($N{r}=0,"",HYPERLINK("#Lancamentos!{lc["Situação"]}"&{lin},"✎"))',
+                font=fnt(11, True, P["destaque"]), align=ALIGN_C)
             r += 1
         fim = r - 1
         faixas_slots.append((ini, fim, tipo))
@@ -2218,6 +2226,8 @@ def construir(D, caminho):
         corr.append(PEDIDO_UNIR_ABAS)
     if not D.get("exemplo") and not any((c[0] or "").startswith(PEDIDO_TOPO[0][:40]) for c in corr):
         corr.append(PEDIDO_TOPO)
+    if not D.get("exemplo") and not any((c[0] or "").startswith(PEDIDO_ATALHO[0][:40]) for c in corr):
+        corr.append(PEDIDO_ATALHO)
     corr = corr or [(None, None, None)]
     HCo = 5
     for j, h in enumerate(["Pedido", "Status", "Como ficou"]):
