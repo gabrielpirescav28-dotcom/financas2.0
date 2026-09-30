@@ -10,7 +10,7 @@
 
 | Aconteceu | O que fazer |
 |---|---|
-| Gastou ou recebeu | Uma linha em **Lançamentos**: Data (`Alt+↓` Enter = hoje), Descrição e Valor. O resto se preenche. |
+| Gastou ou recebeu | Em **Lançamentos**, numa das linhas em branco logo abaixo do cabeçalho: Data (`Alt+↓` Enter = hoje), Descrição e Valor. O resto se preenche. O mais recente fica sempre em cima. |
 | Pagou uma conta fixa | Ela já está lá como **Pendente**: troque para **Pago** (e corrija o valor, se mudou). |
 | Compra parcelada | Lance só a 1ª parcela com `1/10` na coluna Parcela. As outras entram como Pendente na próxima atualização. |
 | Descontar de alguém | Situação **Descontar Depois** e o nome em **Descontar de**. A aba Mês mostra quanto ficou para cada pessoa (só informação). |
@@ -24,7 +24,7 @@
 |---|---|
 | **Mês** | O mês de trabalho: receitas, gastos fixos e extras, resumo, conferência, próximos vencimentos, Descontar Depois por pessoa e semáforo. **É aqui que se troca o mês.** |
 | **Correções IA** | Os seus pedidos: você escreve, a IA implementa, marca **FEITO ✔** e explica em **Como ficou**. |
-| **Lancamentos** | Tabela `tbLancamentos`: onde tudo é lançado. |
+| **Lancamentos** | Tabela `tbLancamentos`: onde tudo é lançado. Do mais recente para o mais antigo, com 30 linhas em branco no topo para digitar. |
 | **Investimentos** | Potes 80/10/7/3 (guardado × gasto) no topo e, embaixo, uma linha por aplicação, com saldo, IR e líquido calculados todo dia. |
 | **Planos** | Premissas, Histórico do CDI, Plano 1 (independência pelos juros, 48 meses) e Plano 2 (renda durável: carreira + aluguéis + juros, 96 meses). |
 | **Visão do ano** | Só consulta: orçamento do mês, o ano por categoria (com minigráficos) e o histórico de todos os meses (**Conferido em**). |
@@ -55,7 +55,7 @@
 - `.xlsx` sem macros. As fórmulas estão em inglês, e o Excel em português as traduz.
 - Funções compatíveis: SUMIFS, SUMPRODUCT, INDEX/MATCH, SMALL/LARGE em fórmula matricial, LOOKUP, IFERROR, OFFSET, NETWORKDAYS. Nada de matriz dinâmica.
 - Verificação feita com os dados reais:
-  - **Recálculo:** no LibreOffice, nenhuma das 16.409 fórmulas dá erro.
+  - **Recálculo:** no LibreOffice, nenhuma das 16.739 fórmulas dá erro.
   - **Histórico:** bate com o "Resumo por mês" do app nos 54 meses. As únicas diferenças são correções pedidas depois da exportação: a conta de gás de julho paga e as linhas lançadas em setembro.
   - **Descontar Depois de set/2026:** o total por pessoa confere com os acertos do app.
   - **Selic nova:** uma taxa nova no Histórico do CDI não muda o saldo já conquistado.

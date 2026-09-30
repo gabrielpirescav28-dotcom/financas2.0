@@ -249,6 +249,11 @@ PEDIDO_UNIR_ABAS = ("Unir abas e facilitar o preenchimento: muitos detalhes de p
                     "Planos e Visão do ano (Orçamento + Anual + Histórico); Categorizar fica até terminar. Saíram Contas do mês, "
                     "Parcelar e Acertos: contas fixas e parcelas já entram como Pendente, e o Descontar Depois virou só informação na "
                     "aba Mês. Caixas de explicação e textos longos foram retirados.")
+PEDIDO_TOPO = ("Não ter que ir até a última linha do Excel para lançar: inverter as linhas (pedido no chat, 30/09/2026)", "FEITO ✔",
+               "Lançamentos agora vem do mais recente para o mais antigo. Logo abaixo do cabeçalho há 30 linhas em branco "
+               "prontas para digitar (Data, Descrição, Valor), e em seguida as contas previstas do mês (Pendente), onde basta "
+               "trocar para Pago/Recebido e corrigir o valor. A cada atualização a ordem é refeita e as 30 linhas voltam. "
+               "Se acabarem antes: botão direito numa linha → Inserir → Linhas da tabela acima.")
 PEDIDO_JEITO_PLINIO = ("Deixar a planilha no jeito do Plínio: como eu visualizo e controlo tudo (pedido no chat, 29/09/2026)", "FEITO ✔",
                        "Tema do Plínio (latão, sereno, brasa); Caderno do mês em três blocos com Mês de trabalho, resumo do mês e "
                        "semáforo (verde pago, amarelo vence em até 3 dias, vermelho atrasado); Lançamentos na ordem da grade "
@@ -656,8 +661,9 @@ def importar_plinio(caminho):
 # =============================================================================
 # REIMPORTAÇÃO DA PRÓPRIA PLANILHA (para gerar uma versão nova sem perder o que foi lançado)
 # =============================================================================
-def _ler_tabela(wb_val, nome):
-    """Lê uma Tabela (ListObject) pelo nome e devolve (cabeçalhos, linhas como dicts), sem a linha de totais."""
+def _ler_tabela(wb_val, nome, todas=False):
+    """Lê uma Tabela (ListObject) pelo nome e devolve (cabeçalhos, linhas como dicts), sem a linha de totais.
+    todas=True mantém as linhas vazias (para casar linha a linha a leitura de valores com a de fórmulas)."""
     for ws in wb_val.worksheets:
         if nome in ws.tables:
             t = ws.tables[nome]
@@ -665,7 +671,7 @@ def _ler_tabela(wb_val, nome):
             cab = [c.value for c in linhas[0]]
             corpo = linhas[1:len(linhas) - (t.totalsRowCount or 0)]
             dados = [dict(zip(cab, [c.value for c in r])) for r in corpo]
-            return cab, [d for d in dados if any(v not in (None, "") for v in d.values())]
+            return cab, dados if todas else [d for d in dados if any(v not in (None, "") for v in d.values())]
     return None, []
 
 
@@ -686,8 +692,8 @@ def importar_propria(caminho):
     _, at_rows = _ler_tabela(wb, "tbAtalhos")
     atalhos_existentes = {(a.get("Descrição") or "").strip().lower(): a for a in at_rows}
 
-    _, rows = _ler_tabela(wb, "tbLancamentos")
-    _, rows_f = _ler_tabela(load_workbook(caminho), "tbLancamentos")      # mesmas linhas, com as fórmulas
+    _, rows = _ler_tabela(wb, "tbLancamentos", todas=True)
+    _, rows_f = _ler_tabela(load_workbook(caminho), "tbLancamentos", todas=True)   # mesmas linhas, com as fórmulas
     lanc = []
     for r, rf in zip(rows, rows_f):
         desc = _txt(r.get("Descrição"))
@@ -1398,10 +1404,16 @@ def construir(D, caminho):
 
     # ---------------------------------------------------------------- Lançamentos
     ws = ws_lanc
-    lanc = D["lanc"]
+    # Correção IA ("preencher na última linha fica difícil"): o mais recente fica em cima e, logo abaixo do
+    # cabeçalho, há linhas em branco prontas para digitar. A cada atualização a ordem é refeita.
+    ordem = sorted(range(len(D["lanc"])), key=lambda i: (D["lanc"][i].get("Data") or D["lanc"][i].get("Competência")
+                                                          or dt.date.min, i), reverse=True)
+    lanc = [D["lanc"][i] for i in ordem]
+    D["lanc"] = lanc
+    NOVAS = 30
     n = len(lanc)
     H = 4
-    ult = H + n
+    ult = H + NOVAS + n
     ncol = len(COLS_LANC)
     ci = {h: 2 + i for i, h in enumerate(COLS_LANC)}          # índice da coluna por nome
     cl = {h: CL(c) for h, c in ci.items()}                     # letra da coluna por nome
@@ -1446,8 +1458,17 @@ def construir(D, caminho):
     estilo_corpo(ws, H + 1, ult, 2, ncol + 1)
     fmts = {"Data": FMT_DATA, "Vencimento": FMT_DATA, "Competência": FMT_COMPETENCIA, "Valor": FMT_MOEDA}
     suaves = ("Mês", "Ano", "Conta no mês?", "Parcela", "Competência")
+    for r in range(H + 1, H + NOVAS + 1):          # linhas em branco no topo, com as fórmulas automáticas
+        for h in COLS_LANC:
+            c = ws.cell(r, ci[h], formulas_lanc.get(h))
+            if h in fmts:
+                c.number_format = fmts[h]
+            if h in suaves:
+                c.alignment = ALIGN_C
+                c.font = fnt(10, color=P["suave"])
+        ws.cell(r, ci["Valor"]).alignment = ALIGN_R
     for i, d in enumerate(lanc):
-        r = H + 1 + i
+        r = H + NOVAS + 1 + i
         for h in COLS_LANC:
             c = ws.cell(r, ci[h])
             if h in formulas_lanc and h not in so_linhas_novas:
@@ -1478,14 +1499,15 @@ def construir(D, caminho):
     ws.column_dimensions.group(cl["Conta"], cl["Observação"], outline_level=1, hidden=True)
     ws.sheet_properties.outlinePr.summaryRight = False
     # Atalhos no topo
-    put(ws, f"{cl['Parcela']}2", f'=HYPERLINK("#Lancamentos!B"&(ROWS({L}[Data])+{H + 1}),"✚  Ir para a próxima linha vazia")',
+    put(ws, f"{cl['Parcela']}2", f'=HYPERLINK("#Lancamentos!B"&({H + 1}+COUNTA({cl["Descrição"]}{H + 1}:{cl["Descrição"]}{H + NOVAS})),"✚  Linha para digitar")',
         font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
     ws.merge_cells(f"{cl['Parcela']}2:{cl['Vencimento']}2")
     put(ws, f"{cl['Tipo']}2", '=HYPERLINK("#\'Mês\'!A1","📒  Mês")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
     ws.merge_cells(f"{cl['Tipo']}2:{cl['Categoria']}2")
     put(ws, f"{cl['Pote']}2", '=HYPERLINK("#Investimentos!A1","◉  Investimentos")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
     ws.merge_cells(f"{cl['Pote']}2:{cl['Quem']}2")
-    D["_linhas_importadas"] = (H + 1, ult)
+    D["_linhas_importadas"] = (H + NOVAS + 1, ult)
+    D["_linhas_novas"] = (H + 1, H + NOVAS)
     D["_col_lanc"] = cl
 
     LIM = ult + 20000
@@ -1556,8 +1578,8 @@ def construir(D, caminho):
     ws.conditional_formatting.add(faixa("Descontar de"), FormulaRule(
         formula=[f'AND({s1}="Descontar Depois",{lin("Descontar de")}="")'], fill=atraso))
     # possível lançamento em dobro (mesma data, descrição e valor) — só nas linhas novas
-    ini_novas = ult + 1
-    ws.conditional_formatting.add(faixa("Descrição", ini_novas), FormulaRule(
+    ini_novas = H + 1
+    ws.conditional_formatting.add(f"{cl['Descrição']}{H + 1}:{cl['Descrição']}{H + NOVAS}", FormulaRule(
         formula=[f'AND(${cl["Descrição"]}{ini_novas}<>"",COUNTIFS({abs_("Data")},${cl["Data"]}{ini_novas},{abs_("Descrição")},${cl["Descrição"]}{ini_novas},{abs_("Valor")},${cl["Valor"]}{ini_novas})>1)'],
         fill=falta, font=Font(color="FF" + P["alerta"], bold=True)))
 
@@ -1580,7 +1602,7 @@ def construir(D, caminho):
     ult_at = HAt + len(atalhos)
     estilo_corpo(ws, HAt + 1, ult_at, 2, nat + 1)
     f_usos = "=COUNTIF(tbLancamentos[Descrição],tbAtalhos[[#This Row],[Descrição]])"
-    f_ultimo = '=IFERROR(LOOKUP(2,1/(tbLancamentos[Descrição]=tbAtalhos[[#This Row],[Descrição]]),tbLancamentos[Valor]),"")'
+    f_ultimo = '=IFERROR(INDEX(tbLancamentos[Valor],MATCH(tbAtalhos[[#This Row],[Descrição]],tbLancamentos[Descrição],0)),"")'   # o mais recente fica em cima
     for i, a in enumerate(atalhos):
         r = HAt + 1 + i
         for j, h in enumerate(COLS_ATALHO):
@@ -2086,7 +2108,8 @@ def construir(D, caminho):
         ws.merge_cells(f"J{pr}:K{pr}")
         pr += 1
     pr += 1
-    for rot_, alvo in [("✚  Novo lançamento", f'"#Lancamentos!B"&(ROWS({L}[Data])+{D["_linhas_importadas"][0]})'),
+    ln0, ln1 = D["_linhas_novas"]
+    for rot_, alvo in [("✚  Novo lançamento", f'"#Lancamentos!B"&({ln0}+COUNTA(Lancamentos!${lc["Descrição"]}${ln0}:${lc["Descrição"]}${ln1}))'),
                        ("◉  Investimentos", '"#Investimentos!A1"'), ("◎  Planos 1 e 2", '"#Planos!A1"'),
                        ("▦  Visão do ano", '"#\'Visão do ano\'!A1"')]:
         put(ws, f"J{pr}", f'=HYPERLINK({alvo},"{rot_}")', font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
@@ -2179,6 +2202,8 @@ def construir(D, caminho):
         corr.append(PEDIDO_JEITO_PLINIO)
     if not D.get("exemplo") and not any((c[0] or "").startswith(PEDIDO_UNIR_ABAS[0][:40]) for c in corr):
         corr.append(PEDIDO_UNIR_ABAS)
+    if not D.get("exemplo") and not any((c[0] or "").startswith(PEDIDO_TOPO[0][:40]) for c in corr):
+        corr.append(PEDIDO_TOPO)
     corr = corr or [(None, None, None)]
     HCo = 5
     for j, h in enumerate(["Pedido", "Status", "Como ficou"]):
