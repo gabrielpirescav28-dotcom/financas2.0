@@ -249,11 +249,12 @@ PEDIDO_UNIR_ABAS = ("Unir abas e facilitar o preenchimento: muitos detalhes de p
                     "Planos e Visão do ano (Orçamento + Anual + Histórico); Categorizar fica até terminar. Saíram Contas do mês, "
                     "Parcelar e Acertos: contas fixas e parcelas já entram como Pendente, e o Descontar Depois virou só informação na "
                     "aba Mês. Caixas de explicação e textos longos foram retirados.")
-PEDIDO_TOPO = ("Não ter que ir até a última linha do Excel para lançar: inverter as linhas (pedido no chat, 30/09/2026)", "FEITO ✔",
-               "Lançamentos agora vem do mais recente para o mais antigo. Logo abaixo do cabeçalho há 30 linhas em branco "
-               "prontas para digitar (Data, Descrição, Valor), e em seguida as contas previstas do mês (Pendente), onde basta "
-               "trocar para Pago/Recebido e corrigir o valor. A cada atualização a ordem é refeita e as 30 linhas voltam. "
-               "Se acabarem antes: botão direito numa linha → Inserir → Linhas da tabela acima.")
+PEDIDO_TOPO = ("Não ter que ir até a última linha nem procurar a conta pendente para mudar para Pago (pedido no chat, 30/09/2026)",
+               "FEITO ✔",
+               "Lançamentos agora abre com a lista do que está Pendente até o fim do mês que vem, pela data de vencimento "
+               "(atrasadas primeiro, em vermelho; a linha fica amarelada enquanto estiver Pendente). Pagou? Troque para Pago ali "
+               "mesmo. Logo abaixo ficam 20 linhas em branco para lançar algo novo (o botão ✚ leva até elas) e depois o histórico, "
+               "do mais recente para o mais antigo. A cada atualização a lista é refeita.")
 PEDIDO_JEITO_PLINIO = ("Deixar a planilha no jeito do Plínio: como eu visualizo e controlo tudo (pedido no chat, 29/09/2026)", "FEITO ✔",
                        "Tema do Plínio (latão, sereno, brasa); Caderno do mês em três blocos com Mês de trabalho, resumo do mês e "
                        "semáforo (verde pago, amarelo vence em até 3 dias, vermelho atrasado); Lançamentos na ordem da grade "
@@ -900,10 +901,10 @@ OBS_PREVISTA = "prevista (conta fixa)"
 OBS_PROJETADA = "projetada (previsão de parcela)"
 
 
-def preparar_previstas(D, hoje=None, meses=3):
+def preparar_previstas(D, hoje=None, meses=2):
     """Correção IA (unir abas / menos procedimento): em vez de copiar o bloco de Contas do mês e usar o Parcelar,
     as contas fixas (favoritos com Recorrente? = sim) e as parcelas restantes já entram em Lançamentos como
-    Pendente para o mês atual e os próximos. No dia, é só trocar para Pago (e corrigir o valor, se mudou).
+    Pendente para o mês atual e o seguinte. No dia, é só trocar para Pago (e corrigir o valor, se mudou).
     Previstas que ficaram sobrando (você lançou a conta numa linha nova) são retiradas."""
     hoje = hoje or dt.date.today()
     lanc = D["lanc"]
@@ -1406,14 +1407,25 @@ def construir(D, caminho):
     ws = ws_lanc
     # Correção IA ("preencher na última linha fica difícil"): o mais recente fica em cima e, logo abaixo do
     # cabeçalho, há linhas em branco prontas para digitar. A cada atualização a ordem é refeita.
-    ordem = sorted(range(len(D["lanc"])), key=lambda i: (D["lanc"][i].get("Data") or D["lanc"][i].get("Competência")
-                                                          or dt.date.min, i), reverse=True)
-    lanc = [D["lanc"][i] for i in ordem]
+    # Correção IA ("no dia a dia tudo é Pendente e eu vou mudando para Pago"): no topo, a lista do que está
+    # Pendente até o fim do mês que vem, pelo vencimento (atrasadas primeiro); depois as linhas em branco; depois o histórico.
+    hoje_ = dt.date.today()
+    fim_prox = dt.date(*_mais_meses(hoje_.year, hoje_.month, 2), 1) - dt.timedelta(days=1)
+    quando = lambda d: d.get("Vencimento") or d.get("Data") or d.get("Competência") or dt.date.min
+    idx = list(range(len(D["lanc"])))
+    a_pagar = sorted((i for i in idx if D["lanc"][i].get("Situação") == "Pendente" and quando(D["lanc"][i]) <= fim_prox),
+                     key=lambda i: (quando(D["lanc"][i]), i))
+    ja = set(a_pagar)
+    resto = sorted((i for i in idx if i not in ja), key=lambda i: (D["lanc"][i].get("Data") or D["lanc"][i].get("Competência")
+                                                                  or dt.date.min, i), reverse=True)
+    lanc = [D["lanc"][i] for i in a_pagar + resto]
     D["lanc"] = lanc
-    NOVAS = 30
+    NA = len(a_pagar)
+    NOVAS = 20
     n = len(lanc)
     H = 4
     ult = H + NOVAS + n
+    NB0 = H + NA + 1                                  # primeira linha em branco
     ncol = len(COLS_LANC)
     ci = {h: 2 + i for i, h in enumerate(COLS_LANC)}          # índice da coluna por nome
     cl = {h: CL(c) for h, c in ci.items()}                     # letra da coluna por nome
@@ -1458,7 +1470,7 @@ def construir(D, caminho):
     estilo_corpo(ws, H + 1, ult, 2, ncol + 1)
     fmts = {"Data": FMT_DATA, "Vencimento": FMT_DATA, "Competência": FMT_COMPETENCIA, "Valor": FMT_MOEDA}
     suaves = ("Mês", "Ano", "Conta no mês?", "Parcela", "Competência")
-    for r in range(H + 1, H + NOVAS + 1):          # linhas em branco no topo, com as fórmulas automáticas
+    for r in range(NB0, NB0 + NOVAS):              # linhas em branco (depois do "a pagar"), com as fórmulas automáticas
         for h in COLS_LANC:
             c = ws.cell(r, ci[h], formulas_lanc.get(h))
             if h in fmts:
@@ -1468,7 +1480,7 @@ def construir(D, caminho):
                 c.font = fnt(10, color=P["suave"])
         ws.cell(r, ci["Valor"]).alignment = ALIGN_R
     for i, d in enumerate(lanc):
-        r = H + NOVAS + 1 + i
+        r = H + 1 + i if i < NA else H + NOVAS + 1 + i
         for h in COLS_LANC:
             c = ws.cell(r, ci[h])
             if h in formulas_lanc and h not in so_linhas_novas:
@@ -1499,15 +1511,15 @@ def construir(D, caminho):
     ws.column_dimensions.group(cl["Conta"], cl["Observação"], outline_level=1, hidden=True)
     ws.sheet_properties.outlinePr.summaryRight = False
     # Atalhos no topo
-    put(ws, f"{cl['Parcela']}2", f'=HYPERLINK("#Lancamentos!B"&({H + 1}+COUNTA({cl["Descrição"]}{H + 1}:{cl["Descrição"]}{H + NOVAS})),"✚  Linha para digitar")',
+    put(ws, f"{cl['Parcela']}2", f'=HYPERLINK("#Lancamentos!B"&({NB0}+COUNTA({cl["Descrição"]}{NB0}:{cl["Descrição"]}{NB0 + NOVAS - 1})),"✚  Lançar algo novo")',
         font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
     ws.merge_cells(f"{cl['Parcela']}2:{cl['Vencimento']}2")
     put(ws, f"{cl['Tipo']}2", '=HYPERLINK("#\'Mês\'!A1","📒  Mês")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
     ws.merge_cells(f"{cl['Tipo']}2:{cl['Categoria']}2")
     put(ws, f"{cl['Pote']}2", '=HYPERLINK("#Investimentos!A1","◉  Investimentos")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
     ws.merge_cells(f"{cl['Pote']}2:{cl['Quem']}2")
-    D["_linhas_importadas"] = (H + NOVAS + 1, ult)
-    D["_linhas_novas"] = (H + 1, H + NOVAS)
+    D["_linhas_importadas"] = (H + 1, ult)
+    D["_linhas_novas"] = (NB0, NB0 + NOVAS - 1)
     D["_col_lanc"] = cl
 
     LIM = ult + 20000
@@ -1578,8 +1590,10 @@ def construir(D, caminho):
     ws.conditional_formatting.add(faixa("Descontar de"), FormulaRule(
         formula=[f'AND({s1}="Descontar Depois",{lin("Descontar de")}="")'], fill=atraso))
     # possível lançamento em dobro (mesma data, descrição e valor) — só nas linhas novas
-    ini_novas = H + 1
-    ws.conditional_formatting.add(f"{cl['Descrição']}{H + 1}:{cl['Descrição']}{H + NOVAS}", FormulaRule(
+    ws.conditional_formatting.add(f"{cl['Data']}{H + 1}:{cl['Quem']}{LIM}", FormulaRule(
+        formula=[f'{s1}="Pendente"'], fill=fill(misturar(P["alerta"], P["card"], 0.86))))
+    ini_novas = NB0
+    ws.conditional_formatting.add(f"{cl['Descrição']}{NB0}:{cl['Descrição']}{NB0 + NOVAS - 1}", FormulaRule(
         formula=[f'AND(${cl["Descrição"]}{ini_novas}<>"",COUNTIFS({abs_("Data")},${cl["Data"]}{ini_novas},{abs_("Descrição")},${cl["Descrição"]}{ini_novas},{abs_("Valor")},${cl["Valor"]}{ini_novas})>1)'],
         fill=falta, font=Font(color="FF" + P["alerta"], bold=True)))
 
