@@ -229,6 +229,26 @@ CORRECOES_FEITAS += [
      "Resgatado = sim; parcial: linha com valor negativo. Não precisa lançar de novo em Lançamentos: o Aporte do mês vem daqui. "
      "As aplicações vindas do app partem da posição calculada pelo app e seguem rendendo."),
 ]
+# Respostas que mudaram com a união das abas (pedido no chat, 30/09/2026): reescritas mesmo já estando FEITO ✔
+CORRECOES_ATUALIZAR = [
+    (r"dashboard", "Aba Dashboard removida. Agora a aba Mês reúne o que era Início + Caderno: resumo, conferência, próximos "
+                   "vencimentos e o Descontar Depois do mês."),
+    (r"contas do m[eê]s|introdu|linha 16", "A aba Contas do mês saiu: as contas fixas (favoritos com Recorrente? = sim) já aparecem "
+     "em Lançamentos como Pendente no mês atual e nos 2 seguintes. Ao pagar, é só trocar para Pago (e corrigir o valor, se mudou). "
+     "Na aba Mês elas aparecem no bloco de gastos fixos e em Próximos vencimentos."),
+    (r"parcelar", "A aba Parcelar saiu: lance só a 1ª parcela com \"1/10\" na coluna Parcela; as que faltam entram como Pendente, "
+     "uma por mês, na próxima atualização. Troque para Pago quando pagar."),
+    (r"or[cç]amento", "O orçamento agora fica no topo da aba Visão do ano: meta mensal por categoria (latão, você edita), realizado "
+     "no mês de trabalho e % usado (verde até 80%, amarelo até 100%, vermelho acima)."),
+    (r"descont[ae]r? depois|desconta depois", "Com Situação = Descontar Depois, escreva de quem descontar na coluna Descontar de "
+     "(logo depois de Quem, com lista). É só informação: a aba Mês mostra quanto ficou para cada pessoa no mês; o acerto você faz "
+     "à mão, como renda maior ou menor no mês seguinte."),
+]
+PEDIDO_UNIR_ABAS = ("Unir abas e facilitar o preenchimento: muitos detalhes de procedimento (pedido no chat, 30/09/2026)", "FEITO ✔",
+                    "De 15 para 6 abas visíveis: Mês (Início + Caderno), Correções IA, Lançamentos, Investimentos (com os Potes), "
+                    "Planos e Visão do ano (Orçamento + Anual + Histórico); Categorizar fica até terminar. Saíram Contas do mês, "
+                    "Parcelar e Acertos: contas fixas e parcelas já entram como Pendente, e o Descontar Depois virou só informação na "
+                    "aba Mês. Caixas de explicação e textos longos foram retirados.")
 PEDIDO_JEITO_PLINIO = ("Deixar a planilha no jeito do Plínio: como eu visualizo e controlo tudo (pedido no chat, 29/09/2026)", "FEITO ✔",
                        "Tema do Plínio (latão, sereno, brasa); Caderno do mês em três blocos com Mês de trabalho, resumo do mês e "
                        "semáforo (verde pago, amarelo vence em até 3 dias, vermelho atrasado); Lançamentos na ordem da grade "
@@ -708,7 +728,7 @@ def importar_propria(caminho):
                 d["Quem"] = pessoas[0]
     # Mês de trabalho: no Caderno (versão nova) ou no Dashboard (versões anteriores)
     mes_sel = ano_sel = None
-    for aba in ("Caderno", "Dashboard"):
+    for aba in ("Mês", "Caderno", "Dashboard"):
         if aba in wb.sheetnames and not mes_sel:
             linha3 = [c.value for row in wb[aba].iter_rows(min_row=3, max_row=3) for c in row]
             mes_sel = next((v for v in linha3 if v in MESES), None)
@@ -813,14 +833,15 @@ def importar_propria(caminho):
 
     # Meses conferidos (coluna "Conferido em" do Histórico) e o "Conta a partir de" do Caderno
     conferidos, conta_a_partir = {}, None
-    if "Historico" in wb.sheetnames:
-        wh = wb["Historico"]
-        cab_h = [c.value for c in wh[5]]
-        if "Conferido em" in cab_h:
-            jc = cab_h.index("Conferido em")
-            for row in wh.iter_rows(min_row=6, values_only=True):
-                if isinstance(row[1], (dt.datetime, dt.date)) and row[jc] not in (None, ""):
-                    conferidos[(row[1].year, row[1].month)] = row[jc]
+    for aba_h in ("Historico", "Visão do ano"):          # a tabela do histórico pode estar em qualquer linha
+        if aba_h not in wb.sheetnames:
+            continue
+        jc = None
+        for row in wb[aba_h].iter_rows(values_only=True):
+            if jc is None:
+                jc = list(row).index("Conferido em") if "Conferido em" in row and row[1] == "Mês" else None
+            elif isinstance(row[1], (dt.datetime, dt.date)) and row[jc] not in (None, ""):
+                conferidos[(row[1].year, row[1].month)] = row[jc]
     if "Caderno" in wb.sheetnames:
         for row in wb["Caderno"].iter_rows(values_only=True):
             for i, v in enumerate(row[:-1]):
@@ -865,7 +886,88 @@ def importar(caminho):
     _, resp = _ler_tabela(load_workbook(caminho, data_only=True), "tbRevisaoCat")
     preparar_revisao(D, {(r.get("Descrição") or "").strip().lower(): r for r in resp if r.get("Descrição")})
     preparar_acertos(D)
+    preparar_previstas(D)
     return D
+
+
+OBS_PREVISTA = "prevista (conta fixa)"
+OBS_PROJETADA = "projetada (previsão de parcela)"
+
+
+def preparar_previstas(D, hoje=None, meses=3):
+    """Correção IA (unir abas / menos procedimento): em vez de copiar o bloco de Contas do mês e usar o Parcelar,
+    as contas fixas (favoritos com Recorrente? = sim) e as parcelas restantes já entram em Lançamentos como
+    Pendente para o mês atual e os próximos. No dia, é só trocar para Pago (e corrigir o valor, se mudou).
+    Previstas que ficaram sobrando (você lançou a conta numa linha nova) são retiradas."""
+    hoje = hoje or dt.date.today()
+    lanc = D["lanc"]
+    chave = lambda d: ((d.get("Descrição") or "").strip().lower(), _competencia(d))
+    reais = collections.Counter(chave(d) for d in lanc if (d.get("Observação") or "") not in (OBS_PREVISTA,))
+    # 1) tira previstas ainda pendentes que já têm o lançamento de verdade no mesmo mês
+    D["lanc"] = lanc = [d for d in lanc if not ((d.get("Observação") or "") == OBS_PREVISTA and d.get("Situação") == "Pendente"
+                                               and reais[chave(d)] > 0)]
+    existentes = collections.Counter(chave(d) for d in lanc)
+    horizonte = [_mais_meses(hoje.year, hoje.month, k) for k in range(meses)]
+    novas = []
+    # 2) contas fixas recorrentes
+    for a in D.get("atalhos") or []:
+        if str(a.get("Recorrente?") or "").lower() != "sim" or not a.get("Descrição"):
+            continue
+        desc = a["Descrição"].strip()
+        anteriores = [d for d in lanc if (d.get("Descrição") or "").strip().lower() == desc.lower() and d.get("Valor")]
+        # só contas de verdade (uma por mês): supermercado, iFood, Uber etc. aparecem várias vezes e ficam de fora
+        por_mes = collections.Counter(_competencia(d) for d in anteriores if (d.get("Observação") or "") not in (OBS_PREVISTA, OBS_PROJETADA))
+        recentes = [por_mes[k] for k in sorted(por_mes)[-6:]]
+        if not recentes or sum(recentes) / len(recentes) > 1.3:
+            continue
+        ult = max(anteriores, key=lambda d: d.get("Data") or dt.date.min) if anteriores else {}
+        valor = a.get("Valor padrão") if isinstance(a.get("Valor padrão"), (int, float)) and a["Valor padrão"] > 0 else ult.get("Valor")
+        if not valor:
+            continue
+        for (ano, mes) in horizonte:
+            if existentes[(desc.lower(), (ano, mes))]:
+                continue
+            dia = int(a["Dia do vencimento"]) if isinstance(a.get("Dia do vencimento"), (int, float)) and a["Dia do vencimento"] else \
+                (ult.get("Data").day if ult.get("Data") else 1)
+            data = dt.date(ano, mes, min(dia, [31, 29 if ano % 4 == 0 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mes - 1]))
+            tipo = a.get("Tipo") or ult.get("Tipo") or "Gasto Fixo"
+            novas.append({"Data": data, "Descrição": desc, "Valor": float(valor), "Vencimento": data, "Situação": "Pendente",
+                          "Tipo": tipo, "Categoria": a.get("Categoria") or ult.get("Categoria"), "Pote": a.get("Pote") or ult.get("Pote"),
+                          "Quem": a.get("Quem") or ult.get("Quem"), "Conta": a.get("Conta") or ult.get("Conta"),
+                          "Forma de pagamento": a.get("Forma de pagamento") or ult.get("Forma de pagamento"),
+                          "Observação": OBS_PREVISTA})
+            existentes[(desc.lower(), (ano, mes))] += 1
+    # 3) parcelas: lançou a 1/10 (ou qualquer k/n)? As que faltam entram como Pendente, uma por mês
+    series = {}
+    for d in lanc:
+        m = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", str(d.get("Parcela") or ""))
+        if not m or not d.get("Data") or d.get("Tipo") in ("Receita", "Investimento"):
+            continue
+        k, n = int(m.group(1)), int(m.group(2))
+        sk = ((d.get("Descrição") or "").strip().lower(), n, round(d.get("Valor") or 0, 2))
+        if sk not in series or k > series[sk][0]:
+            series[sk] = (k, d)
+    limite = dt.date(*_mais_meses(hoje.year, hoje.month, -2), 1)
+    # parcela já existe se, no mesmo mês, há uma linha com o mesmo j/n e valor parecido (mesmo com a descrição escrita diferente)
+    parcelas_mes = collections.defaultdict(list)
+    for d in lanc:
+        if d.get("Parcela") and d.get("Data"):
+            parcelas_mes[(_competencia(d), str(d["Parcela"]).replace(" ", ""))].append(d.get("Valor") or 0)
+    for (desc_l, n, _), (k, d) in series.items():
+        if k >= n or d["Data"] < limite:
+            continue
+        for j in range(k + 1, n + 1):
+            ano, mes = _mais_meses(d["Data"].year, d["Data"].month, j - k)
+            if any(abs(v - (d.get("Valor") or 0)) <= 0.05 * max(1, abs(d.get("Valor") or 0)) for v in parcelas_mes[((ano, mes), f"{j}/{n}")]):
+                continue
+            ultimo = [31, 29 if ano % 4 == 0 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mes - 1]
+            data = dt.date(ano, mes, min(d["Data"].day, ultimo))
+            nova = {h: d.get(h) for h in ("Descrição", "Valor", "Tipo", "Categoria", "Pote", "Quem", "Conta", "Forma de pagamento",
+                                          "Descontar de")}
+            nova.update({"Data": data, "Vencimento": data, "Parcela": f"{j}/{n}", "Situação": "Pendente", "Observação": OBS_PROJETADA})
+            novas.append(nova)
+    lanc.extend(novas)
+    D["info_previstas"] = len(novas)
 
 
 def preparar_acertos(D):
@@ -1202,24 +1304,20 @@ def ancorar(ws, ch, col_ini, lin_ini, col_fim, lin_fim):
 # =============================================================================
 def construir(D, caminho):
     wb = Workbook()
-    ws_ini = wb.active
-    ws_ini.title = "Inicio"
-    ws_corr = wb.create_sheet("Correções IA")      # 2ª aba: onde você deixou
-    ws_cad = wb.create_sheet("Caderno")
+    # Abas (Correção IA: unir abas e simplificar) — Mês reúne Início + Caderno + contas do mês;
+    # Investimentos inclui os Potes; Visão do ano reúne Orçamento + Anual + Histórico.
+    ws_cad = wb.active
+    ws_cad.title = "Mês"
+    ws_corr = wb.create_sheet("Correções IA")
     ws_lanc = wb.create_sheet("Lancamentos")
-    ws_rev = wb.create_sheet("Categorizar")
-    ws_contas = wb.create_sheet("ContasMes")
-    ws_parc = wb.create_sheet("Parcelar")
-    ws_orc = wb.create_sheet("Orcamento")
-    ws_potes = wb.create_sheet("Potes")
-    ws_anual = wb.create_sheet("Anual")
-    ws_hist = wb.create_sheet("Historico")
-    ws_p1 = wb.create_sheet("Planos")      # Plano 1 e Plano 2 na mesma aba (Correção IA)
-    ws_p2 = None
     ws_inv = wb.create_sheet("Investimentos")
-    ws_ac = wb.create_sheet("Acertos")
+    ws_p1 = wb.create_sheet("Planos")
+    ws_ano = wb.create_sheet("Visão do ano")
+    ws_rev = wb.create_sheet("Categorizar")
     ws_at = wb.create_sheet("Atalhos")
     ws_cfg = wb.create_sheet("Config")
+    ws_potes = ws_inv
+    ws_orc = ws_anual = ws_hist = ws_ano
     ws_calc = wb.create_sheet("Calc")
     L = "tbLancamentos"
     CL = get_column_letter
@@ -1244,6 +1342,7 @@ def construir(D, caminho):
         ("tbCatOutras", "INVESTIMENTOS / OUTRAS", ["Categoria (fora dos gastos)"], [[c] for c in D["cat_outras"]], [26]),
         ("tbPotes", "POTES", ["Pote"], [[p] for p in D["potes"]], [16]),
         ("tbPessoas", "FAMÍLIA (QUEM)", ["Quem"], [[p] for p in D.get("pessoas") or ["Família"]], [14]),
+        ("tbDescontar", "DESCONTAR DE", ["Pessoa"], [[p] for p in D.get("acertos_pessoas") or []], [14]),
         ("tbContas", "CONTAS / BANCOS", ["Conta", "Tipo de conta", "Banco"], D["contas"], [20, 15, 12]),
         ("tbCartoes", "CARTÕES", ["Cartão", "Bandeira", "Dia fechamento", "Dia vencimento", "Limite"], D["cartoes"], [18, 12, 11, 11, 14]),
         ("tbFormas", "FORMAS DE PAGAMENTO", ["Forma de pagamento"], [[f] for f in D["formas"]], [20]),
@@ -1285,7 +1384,7 @@ def construir(D, caminho):
             nome, attr_text=f"OFFSET(Config!${c}${L0 + 1},0,0,MAX(1,SUMPRODUCT(--(LEN({rng_cfg(tab)})>0))),1)")
 
     for nome, tab in [("CatReceita", "tbCatReceita"), ("CatDespesa", "tbCatDespesa"), ("CatOutras", "tbCatOutras"),
-                      ("Potes", "tbPotes"), ("Pessoas", "tbPessoas"), ("ListaContas", "tbContas"), ("ListaCartoes", "tbCartoes"),
+                      ("Potes", "tbPotes"), ("Pessoas", "tbPessoas"), ("PessoasDescontar", "tbDescontar"), ("ListaContas", "tbContas"), ("ListaCartoes", "tbCartoes"),
                       ("FormasPagamento", "tbFormas"), ("Tipos", "tbTipos"), ("Situacoes", "tbSituacoes"),
                       ("Anos", "tbAnos")]:
         nome_dinamico(nome, tab)
@@ -1382,9 +1481,9 @@ def construir(D, caminho):
     put(ws, f"{cl['Parcela']}2", f'=HYPERLINK("#Lancamentos!B"&(ROWS({L}[Data])+{H + 1}),"✚  Ir para a próxima linha vazia")',
         font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
     ws.merge_cells(f"{cl['Parcela']}2:{cl['Vencimento']}2")
-    put(ws, f"{cl['Tipo']}2", '=HYPERLINK("#Caderno!A1","📒  Caderno do mês")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
+    put(ws, f"{cl['Tipo']}2", '=HYPERLINK("#\'Mês\'!A1","📒  Mês")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
     ws.merge_cells(f"{cl['Tipo']}2:{cl['Categoria']}2")
-    put(ws, f"{cl['Pote']}2", '=HYPERLINK("#Inicio!A1","⌂  Início")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
+    put(ws, f"{cl['Pote']}2", '=HYPERLINK("#Investimentos!A1","◉  Investimentos")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
     ws.merge_cells(f"{cl['Pote']}2:{cl['Quem']}2")
     D["_linhas_importadas"] = (H + 1, ult)
     D["_col_lanc"] = cl
@@ -1788,220 +1887,8 @@ def construir(D, caminho):
     dv_lista(ws, "=Categorias", f"I{HR + 1}:I{HR + len(linhas_rev) + 200}", msg="Escolha uma categoria da aba Config (ou cadastre uma nova lá).")
     ws.conditional_formatting.add(f"I{HR + 1}:I{HR + len(linhas_rev)}", FormulaRule(
         formula=[f'AND($B{HR + 1}<>"",$I{HR + 1}="")'], fill=fill(misturar(P["negativo"], P["card"], 0.8))))
-    put(ws, "H2", '=HYPERLINK("#Inicio!A1","⌂  Início")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
+    put(ws, "H2", '=HYPERLINK("#\'Mês\'!A1","⌂  Mês")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
     ws.freeze_panes = f"C{HR + 1}"
-
-    # ---------------------------------------------------------------- Contas do mês (checklist dos recorrentes)
-    ws = ws_contas
-    pintar_fundo(ws, 26, 3)
-    titulo_aba(ws, "Contas do mês", "Checklist das contas e receitas recorrentes (marcadas em Favoritos). O status vem dos lançamentos do mês de trabalho escolhido no Caderno.", 20)
-    put(ws, "E2", '="Mês: "&MesSelecionado&" / "&AnoSelecionado', font=fnt(13, True, P["destaque"]), align=Alignment(horizontal="right", vertical="center"))
-    ws.merge_cells("E2:G2")
-    put(ws, "I2", '=HYPERLINK("#Inicio!A1","⌂  Início")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
-    larguras(ws, {"A": 2, "B": 28, "C": 22, "D": 7, "E": 21, "F": 21, "G": 26, "H": 6, "I": 12, "J": 6, "K": 6, "L": 3})
-    for colx in ("H", "I", "J", "K"):
-        ws.column_dimensions[colx].hidden = True
-    HC = 16          # linhas 9–14: caixa "como funciona" (recolhida no [+], Correção IA: mais espaço para a lista)
-    ini_c, fim_c = HC + 1, HC + NREC
-    # cards de resumo
-    cards = [("B", "C", "CONTAS LANÇADAS", f'=SUMPRODUCT(--(I{ini_c}:I{fim_c}>0))&" de "&SUMPRODUCT(--(LEN(B{ini_c}:B{fim_c})>0))', None, P["destaque"]),
-             ("E", "E", "PREVISTO", f"=SUM(E{ini_c}:E{fim_c})", FMT_MOEDA, P["suave"]),
-             ("F", "F", "JÁ LANÇADO", f"=SUM(F{ini_c}:F{fim_c})", FMT_MOEDA, P["positivo"]),
-             ("G", "G", "FALTA LANÇAR (PREVISTO)", f'=SUMPRODUCT((LEFT(G{ini_c}:G{fim_c},1)="✖")*N(+E{ini_c}:E{fim_c}))', FMT_MOEDA, P["negativo"])]
-    for a, b, rot, f, fmt_, cor in cards:
-        area(ws, f"{a}5:{b}7", fill_=CARD)
-        area(ws, f"{a}5:{b}5", border=Border(top=side(cor, "thick")))
-        mesclar(ws, f"{a}5:{b}5", rot, fill_=CARD, font=fnt(9, True, P["suave"]), align=Alignment(horizontal="left", vertical="bottom", indent=1),
-                border=Border(top=side(cor, "thick")))
-        mesclar(ws, f"{a}6:{b}6", f, fill_=CARD, font=fnt(13, True), fmt=fmt_, align=Alignment(horizontal="left", vertical="center", indent=1))
-    ws.row_dimensions[5].height = 20
-    ws.row_dimensions[6].height = 30
-    ws.row_dimensions[7].height = 16
-    D["_contas_resumo"] = ("B6", f"G6")
-    caixa_ajuda(ws, "B", "G", 9, [
-        "É o checklist das contas que se repetem todo mês: tudo que está marcado Recorrente? = sim na aba Atalhos (Favoritos).",
-        "Para cada conta, olha os lançamentos do mês de trabalho (Caderno) e diz: ✔ Pago · ⏳ Pendente · ✖ Falta lançar.",
-        "Previsto = o Valor padrão do favorito (ou o que você pagou no mês anterior). Lançado = o que já está em Lançamentos.",
-        "À direita, o bloco pronto para colar traz só o que falta lançar: copie, vá à 1ª linha vazia e cole só os valores.",
-        "Conta nova que se repete? Na aba Atalhos, marque Recorrente? = sim e o dia do vencimento. Deixou de pagar? Marque não."])
-    for r_box in range(9, 15):
-        ws.row_dimensions[r_box].outlineLevel = 1
-        ws.row_dimensions[r_box].hidden = True
-    ws.sheet_properties.outlinePr.summaryBelow = False
-    put(ws, "B8", "ⓘ  Como funciona: clique no [+] à esquerda para abrir a explicação.", font=fnt(9, color=P["suave"], italic=True))
-    ws.row_dimensions[8].height = 16
-    cab_c = ["Conta / receita", "Categoria", "Dia", "Previsto", "Lançado no mês", "Status", "Linha", "Lançamentos", "Pendentes", "Falta nº"]
-    for j, h in enumerate(cab_c):
-        ws.cell(HC, 2 + j, h)
-    estilo_cabecalho(ws, HC, 2, 7)
-    estilo_corpo(ws, ini_c, fim_c, 2, 7)
-    A = lambda col, r: f"INDEX(Atalhos!${at_col[col]}:${at_col[col]},$H{r})"
-    for k in range(1, NREC + 1):
-        r = HC + k
-        cr = 1 + k
-        ws.cell(r, 8, f"=Calc!AR{cr}")
-        ws.cell(r, 2, f'=IF($H{r}=0,"",{A("Descrição", r)}&"")')
-        ws.cell(r, 3, f'=IF($H{r}=0,"",{A("Categoria", r)}&"")')
-        ws.cell(r, 4, f'=IF($H{r}=0,"",IF({A("Dia do vencimento", r)}="","",{A("Dia do vencimento", r)}))')
-        ws.cell(r, 5, f'=IF(B{r}="","",IF(N({A("Valor padrão", r)})>0,{A("Valor padrão", r)},'
-                      f'SUMIFS({L}[Valor],{L}[Descrição],B{r},{L}[Mês],Calc!$B$6,{L}[Ano],Calc!$B$7)))')
-        ws.cell(r, 6, f'=IF(B{r}="","",SUMIFS({L}[Valor],{L}[Descrição],B{r},{L}[Mês],MesNum,{L}[Ano],AnoSelecionado))')
-        ws.cell(r, 9, f'=IF(B{r}="",0,COUNTIFS({L}[Descrição],B{r},{L}[Mês],MesNum,{L}[Ano],AnoSelecionado))')
-        ws.cell(r, 10, f'=IF(B{r}="",0,COUNTIFS({L}[Descrição],B{r},{L}[Mês],MesNum,{L}[Ano],AnoSelecionado,{L}[Situação],"Pendente"))')
-        vence = f'DATE(AnoSelecionado,MesNum,MIN(IF(D{r}="",1,D{r}),DAY(EOMONTH(DATE(AnoSelecionado,MesNum,1),0))))'
-        ws.cell(r, 7, f'=IF(B{r}="","",IF(I{r}=0,IF(AND(D{r}<>"",{vence}<TODAY()),"✖ Atrasada — falta lançar","✖ Falta lançar"),'
-                      f'IF(J{r}>0,IF({vence}<TODAY(),"⏳ Pendente — vencida","⏳ Pendente"),IF({A("Tipo", r)}="Receita","✔ Recebido","✔ Pago"))))')
-        ws.cell(r, 11, f'=IF(LEFT(G{r},1)="✖",SUMPRODUCT(--(LEFT($G${ini_c}:G{r},1)="✖")),0)')
-        for colx in (5, 6):
-            ws.cell(r, colx).number_format = FMT_MOEDA
-            ws.cell(r, colx).alignment = ALIGN_R
-        ws.cell(r, 4).alignment = ALIGN_C
-        ws.cell(r, 7).font = fnt(10, True)
-    rngG = f"G{ini_c}:G{fim_c}"
-    ws.conditional_formatting.add(rngG, FormulaRule(formula=[f'LEFT(G{ini_c},1)="✔"'], font=Font(color="FF" + P["positivo"], bold=True)))
-    ws.conditional_formatting.add(rngG, FormulaRule(formula=[f'LEFT(G{ini_c},1)="⏳"'], font=Font(color="FF" + P["alerta"], bold=True)))
-    ws.conditional_formatting.add(rngG, FormulaRule(formula=[f'LEFT(G{ini_c},1)="✖"'], font=Font(color="FF" + P["negativo"], bold=True)))
-    # bloco pronto para colar em Lançamentos (só o que falta lançar)
-    BC = 13   # coluna M
-    for j, h in enumerate(COLS_BLOCO):
-        ws.column_dimensions[CL(BC + j)].width = LARG_BLOCO[h]
-        ws.cell(HC, BC + j, h)
-    estilo_cabecalho(ws, HC, BC, BC + len(COLS_BLOCO) - 1)
-    estilo_corpo(ws, ini_c, fim_c, BC, BC + len(COLS_BLOCO) - 1, fill_=CARD2)
-    put(ws, f"{CL(BC)}4", "BLOCO PRONTO PARA COLAR — só as contas que faltam lançar", font=fnt(10, True, P["suave"]))
-    instr = ["1. Selecione as linhas preenchidas do bloco abaixo e copie (Ctrl+C).",
-             "2. Clique no botão ao lado para ir à primeira linha vazia de Lançamentos.",
-             "3. Cole só os valores: Ctrl+Shift+V (ou Ctrl+Alt+V ➜ Valores).",
-             "4. Elas entram como Pendente: troque para Pago quando pagar."]
-    for i, t in enumerate(instr):
-        put(ws, f"{CL(BC)}{5 + i}", t, font=fnt(9, color=P["suave"]))
-    put(ws, f"{CL(BC + 6)}5", f'=HYPERLINK("#Lancamentos!B"&(ROWS({L}[Data])+{D["_linhas_importadas"][0]}),"✚  Ir para a primeira linha vazia")',
-        font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
-    ws.merge_cells(f"{CL(BC + 6)}5:{CL(BC + 9)}6")
-    for k in range(1, NREC + 1):
-        r = HC + k
-        idx = f"MATCH({k},$K${ini_c}:$K${fim_c},0)"
-        lin_at = f"INDEX($H${ini_c}:$H${fim_c},{idx})"
-        Ai = lambda col: f'INDEX(Atalhos!${at_col[col]}:${at_col[col]},{lin_at})&""'
-        dia = f"INDEX($D${ini_c}:$D${fim_c},{idx})"
-        data_f = f'IFERROR(DATE(AnoSelecionado,MesNum,MIN(IF({dia}="",1,{dia}),DAY(EOMONTH(DATE(AnoSelecionado,MesNum,1),0)))),"")'
-        mapa = {
-            "Data": "=" + data_f, "Vencimento": "=" + data_f,
-            "Descrição": f'=IFERROR(INDEX($B${ini_c}:$B${fim_c},{idx}),"")',
-            "Valor": f'=IFERROR(IF(N(INDEX($E${ini_c}:$E${fim_c},{idx}))>0,INDEX($E${ini_c}:$E${fim_c},{idx}),""),"")',
-            "Tipo": f'=IFERROR({Ai("Tipo")},"")', "Categoria": f'=IFERROR({Ai("Categoria")},"")',
-            "Situação": f'=IFERROR(IF({idx}>0,"Pendente",""),"")',
-            "Pote": f'=IFERROR(IF({Ai("Pote")}<>"",{Ai("Pote")},INDEX(tbCatDespesa[Fundo padrão],MATCH({Ai("Categoria")},tbCatDespesa[Categoria de gasto],0))&""),"")',
-            "Quem": f'=IFERROR(IF({Ai("Quem")}<>"",{Ai("Quem")},QuemPadrao),"")',
-            "Conta": f'=IFERROR({Ai("Conta")},"")', "Forma de pagamento": f'=IFERROR({Ai("Forma de pagamento")},"")',
-            "Parcela": '=""', "Descontar de": '=""',
-        }
-        for j, h in enumerate(COLS_BLOCO):
-            cc = ws.cell(r, BC + j, mapa[h])
-            if h in ("Data", "Vencimento"):
-                cc.number_format = FMT_DATA
-            elif h == "Valor":
-                cc.number_format, cc.alignment = FMT_MOEDA, ALIGN_R
-    ws.freeze_panes = f"A{HC + 1}"
-
-    # ---------------------------------------------------------------- Parcelar / repetir
-    ws = ws_parc
-    pintar_fundo(ws, 20, 3)
-    titulo_aba(ws, "Parcelar ou repetir", "Preencha os campos à esquerda: o bloco à direita gera uma linha por parcela (ou por mês). Copie, vá até a primeira linha vazia de Lançamentos e cole só os valores.", 16)
-    larguras(ws, {"A": 2, "B": 30, "C": 22, "D": 3})
-    put(ws, "B4", "COMPRA / LANÇAMENTO", font=fnt(10, True, P["suave"]))
-    campos = [
-        ("Modo", "Parcelado", '"Parcelado,Repetir todo mês"', "Parcelado: divide em parcelas 1/n, 2/n...  Repetir: o mesmo valor todo mês (aluguel, mesada, assinatura)."),
-        ("Descrição", "Geladeira nova (exemplo)", "=ListaFavoritos", "Pode escolher um favorito: tipo, categoria e pote vêm dele se ficarem vazios abaixo."),
-        ("Valor (R$)", 3600, None, None),
-        ("O valor informado é", "Total da compra", '"Total da compra,Valor de cada parcela"', None),
-        ("Nº de parcelas / meses", 10, None, "Entre 1 e 60."),
-        ("Data da 1ª parcela", dt.date(D["ano_padrao"] + (D["mes_padrao"] // 12), D["mes_padrao"] % 12 + 1, 10), None, None),
-        ("Tipo", tipo_padrao, "=Tipos", None),
-        ("Categoria (vazio = do favorito)", None, "=Categorias", None),
-        ("Pote (vazio = do favorito)", None, "=Potes", None),
-        ("Quem", None, "=Pessoas", None),
-        ("Conta / cartão", None, "=Contas", None),
-        ("Forma de pagamento", "Cartão de crédito" if "Cartão de crédito" in D["formas"] else None, "=FormasPagamento", None),
-        ("1ª parcela já foi paga?", "não", '"sim,não"', "sim: a 1ª entra como Pago; as demais como Pendente."),
-    ]
-    ref = {}
-    for i, (rot, val, lista_dv, dica) in enumerate(campos):
-        r = 5 + i
-        ws.row_dimensions[r].height = 22
-        put(ws, f"B{r}", rot, font=fnt(10, color=P["suave"]), fill_=CARD, align=ALIGN_L)
-        put(ws, f"C{r}", val, font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_L,
-            border=Border(bottom=side(P["destaque"])))
-        ref[rot] = f"$C${r}"
-        if lista_dv:
-            dv = DataValidation(type="list", formula1=lista_dv, allow_blank=True, showErrorMessage=lista_dv.startswith('"'))
-            if dica:
-                dv.showInputMessage, dv.prompt = True, dica
-            ws.add_data_validation(dv)
-            dv.add(f"C{r}")
-    ws[ref["Valor (R$)"].replace("$", "")].number_format = FMT_MOEDA
-    ws[ref["Data da 1ª parcela"].replace("$", "")].number_format = FMT_DATA
-    dvn = DataValidation(type="whole", operator="between", formula1="1", formula2="60", showErrorMessage=True,
-                         error="Use de 1 a 60.", errorTitle="Nº de parcelas")
-    ws.add_data_validation(dvn)
-    dvn.add(ref["Nº de parcelas / meses"].replace("$", ""))
-    modo, dsc, val, tv, nn, d1 = (ref[k] for k in ("Modo", "Descrição", "Valor (R$)", "O valor informado é", "Nº de parcelas / meses", "Data da 1ª parcela"))
-    r0 = 5 + len(campos) + 1
-    put(ws, f"B{r0}", "RESUMO", font=fnt(10, True, P["suave"]))
-    parcela_f = f'IF({modo}="Repetir todo mês",{val},IF({tv}="Total da compra",ROUND({val}/MAX(1,{nn}),2),{val}))'
-    resumo = [("Valor de cada parcela", f"={parcela_f}", FMT_MOEDA),
-              ("Total", f'=IF(AND({modo}="Parcelado",{tv}="Total da compra"),{val},{parcela_f}*{nn})', FMT_MOEDA),
-              ("Última parcela em", f'=IFERROR(DATE(YEAR({d1}),MONTH({d1})+{nn}-1,1),"")', FMT_COMPETENCIA)]
-    for i, (rot, f, fmt_) in enumerate(resumo):
-        r = r0 + 1 + i
-        put(ws, f"B{r}", rot, font=fnt(10, color=P["suave"]), fill_=CARD, align=ALIGN_L)
-        put(ws, f"C{r}", f, font=fnt(11, True), fill_=CARD, fmt=fmt_, align=ALIGN_L)
-    put(ws, f"B{r0 + 5}", '=HYPERLINK("#Inicio!A1","⌂  Início")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
-    PC = 5   # bloco a partir da coluna E
-    NPARC = 60
-    for j, h in enumerate(COLS_BLOCO):
-        ws.column_dimensions[CL(PC + j)].width = LARG_BLOCO[h]
-        ws.cell(4, PC + j, h)
-    estilo_cabecalho(ws, 4, PC, PC + len(COLS_BLOCO) - 1)
-    put(ws, f"{CL(PC)}2", f'=HYPERLINK("#Lancamentos!B"&(ROWS({L}[Data])+{D["_linhas_importadas"][0]}),"✚  Ir para a primeira linha vazia de Lançamentos")',
-        font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
-    ws.merge_cells(f"{CL(PC)}2:{CL(PC + 4)}2")
-    estilo_corpo(ws, 5, 4 + NPARC, PC, PC + len(COLS_BLOCO) - 1, fill_=CARD2)
-    at_de = lambda col: f'IFERROR(INDEX(tbAtalhos[{col}],MATCH({dsc},tbAtalhos[Descrição],0))&"","")'
-    esc = lambda campo, col: f'IF({ref[campo]}<>"",{ref[campo]},{at_de(col)})'
-    for i in range(1, NPARC + 1):
-        r = 4 + i
-        on = f"{i}<={nn}"
-        mes_i = f"MONTH({d1})+{i - 1}"
-        tipo_i = f'IF({ref["Tipo"]}<>"",{ref["Tipo"]},IFERROR(INDEX(tbAtalhos[Tipo],MATCH({dsc},tbAtalhos[Descrição],0))&"","{tipo_padrao}"))'
-        valor_i = (f'IF({modo}="Repetir todo mês",{val},IF({tv}="Total da compra",IF({i}<{nn},ROUND({val}/{nn},2),'
-                   f'ROUND({val}-ROUND({val}/{nn},2)*({nn}-1),2)),{val}))')
-        data_i = f'DATE(YEAR({d1}),{mes_i},MIN(DAY({d1}),DAY(EOMONTH(DATE(YEAR({d1}),{mes_i},1),0))))'
-        cat_i = esc("Categoria (vazio = do favorito)", "Categoria")
-        pote_i = esc("Pote (vazio = do favorito)", "Pote")
-        mapa = {
-            "Data": f'=IF({on},{data_i},"")', "Vencimento": f'=IF({on},{data_i},"")',
-            "Descrição": f'=IF({on},{dsc},"")',
-            "Valor": f'=IF({on},{valor_i},"")',
-            "Tipo": f'=IF({on},{tipo_i},"")',
-            "Categoria": f'=IF({on},{cat_i},"")',
-            "Situação": f'=IF({on},IF(AND({i}=1,{ref["1ª parcela já foi paga?"]}="sim"),IF({tipo_i}="Receita","Recebido","Pago"),"Pendente"),"")',
-            "Pote": f'=IF({on},IF({pote_i}<>"",{pote_i},IFERROR(INDEX(tbCatDespesa[Fundo padrão],MATCH({cat_i},tbCatDespesa[Categoria de gasto],0))&"","")),"")',
-            "Quem": f'=IF({on},IF({esc("Quem", "Quem")}<>"",{esc("Quem", "Quem")},QuemPadrao),"")',
-            "Conta": f'=IF({on},{esc("Conta / cartão", "Conta")},"")',
-            "Forma de pagamento": f'=IF({on},{esc("Forma de pagamento", "Forma de pagamento")},"")',
-            "Parcela": f'=IF(AND({on},{modo}="Parcelado"),"{i}/"&{nn},"")',
-            "Descontar de": '=""',
-        }
-        for j, h in enumerate(COLS_BLOCO):
-            cc = ws.cell(r, PC + j, mapa[h])
-            if h in ("Data", "Vencimento"):
-                cc.number_format = FMT_DATA
-            elif h == "Valor":
-                cc.number_format, cc.alignment = FMT_MOEDA, ALIGN_R
-            elif h == "Parcela":
-                cc.alignment = ALIGN_C
-    ws.freeze_panes = "A5"
 
     # ---------------------------------------------------------------- Caderno do mês (o Painel Mensal)
     ws = ws_cad
@@ -2013,16 +1900,16 @@ def construir(D, caminho):
     ws.row_dimensions[1].height = 10
     ws.row_dimensions[2].height = 30
     ws.row_dimensions[3].height = 28
-    put(ws, "B2", "Caderno do mês", font=fnt(20, True), align=Alignment(vertical="bottom"))
-    put(ws, "B3", "Receitas, gastos fixos e gastos extras do mês de trabalho — como o Painel Mensal. Pendente aparece, mas não entra no total.",
+    put(ws, "B2", "Mês", font=fnt(20, True), align=Alignment(vertical="bottom"))
+    put(ws, "B3", "O mês de trabalho: receitas, gastos fixos e extras. Pendente aparece, mas só soma quando virar Pago.",
         font=fnt(9, color=P["suave"]), align=Alignment(vertical="center"))
     put(ws, "J2", "MÊS DE TRABALHO  (todo o resto segue este mês)", font=fnt(9, True, P["suave"]), align=Alignment(vertical="bottom", indent=1))
     ws.merge_cells("J2:K2")
     sel_borda = Border(bottom=side(P["destaque"], "medium"))
     put(ws, "J3", MESES[D["mes_padrao"] - 1], font=fnt(14, True, P["destaque"]), fill_=CARD2, align=ALIGN_C, border=sel_borda)
     put(ws, "K3", D["ano_padrao"], font=fnt(14, True, P["destaque"]), fill_=CARD2, align=ALIGN_C, border=sel_borda)
-    wb.defined_names["MesSelecionado"] = DefinedName("MesSelecionado", attr_text="Caderno!$J$3")
-    wb.defined_names["AnoSelecionado"] = DefinedName("AnoSelecionado", attr_text="Caderno!$K$3")
+    wb.defined_names["MesSelecionado"] = DefinedName("MesSelecionado", attr_text="'Mês'!$J$3")
+    wb.defined_names["AnoSelecionado"] = DefinedName("AnoSelecionado", attr_text="'Mês'!$K$3")
     dv_lista(ws, "=Meses", "J3", "Mês inválido", "Escolha um mês da lista.")
     dv_lista(ws, "=Anos", "K3", "Ano inválido", "Escolha um ano da lista (cadastre novos anos na aba Config).")
     ws.freeze_panes = "A4"
@@ -2155,18 +2042,40 @@ def construir(D, caminho):
     ref_dup = linha_painel("Possíveis em dobro", f"=SUM(O{prim}:O{ult_s})/2", fmt_="0")
     linha_painel("Gastos vs. mês anterior", "=Calc!B16", fmt_=FMT_VAR)
     hc = hist_col
-    busca_h = f"MATCH(DATE(AnoSelecionado,MesNum,1),Historico!$B$6:$B$1000,0)"
+    busca_h = f"MATCH(DATE(AnoSelecionado,MesNum,1),'Visão do ano'!$B$6:$B$1000,0)"
     ref_conf = linha_painel("Mês conferido em",
-                            f'=IFERROR(IF(INDEX(Historico!${hc["Conferido em"]}$6:${hc["Conferido em"]}$1000,{busca_h})="","ainda não",'
-                            f'INDEX(Historico!${hc["Conferido em"]}$6:${hc["Conferido em"]}$1000,{busca_h})),"ainda não")', fmt_=FMT_DATA)
+                            f'=IFERROR(IF(INDEX(\'Visão do ano\'!${hc["Conferido em"]}$6:${hc["Conferido em"]}$1000,{busca_h})="","ainda não",'
+                            f'INDEX(\'Visão do ano\'!${hc["Conferido em"]}$6:${hc["Conferido em"]}$1000,{busca_h})),"ainda não")', fmt_=FMT_DATA)
     for ref_ in (ref_atr, ref_sem, ref_dup, ref_semdata, ref_rev, ref_ddn):
         ws.conditional_formatting.add(ref_, FormulaRule(formula=[f"{ref_}>0"], font=Font(color="FF" + P["negativo"], bold=True)))
     ws.conditional_formatting.add(ref_conf, FormulaRule(formula=[f'{ref_conf}="ainda não"'], font=Font(color="FF" + P["alerta"], bold=True)))
-    put(ws, f"J{pr}", f'=HYPERLINK("#Historico!{hc["Conferido em"]}"&IFERROR({busca_h}+5,6),"✔  Marcar o mês como conferido (Histórico) ➜")',
+    put(ws, f"J{pr}", f'=HYPERLINK("#\'Visão do ano\'!{hc["Conferido em"]}"&IFERROR({busca_h}+5,6),"✔  Marcar o mês como conferido ➜")',
         font=fnt(10, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
     ws.merge_cells(f"J{pr}:K{pr}")
     ws.row_dimensions[pr].height = 22
     pr += 2
+    secao_painel("PRÓXIMOS VENCIMENTOS E ATRASADOS")
+    ini_v = pr
+    for k in range(8):
+        cr = 2 + k
+        linha_painel(None, f"=Calc!AY{cr}")
+        ws[f"J{pr - 1}"] = f'=IF(Calc!AX{cr}="","",TEXT(Calc!AW{cr},"dd/mm")&"   "&Calc!AX{cr}&IF(Calc!AZ{cr}="Atrasada","  (atrasada)",""))'
+        ws[f"J{pr - 1}"].font = fnt(10)
+        ws[f"K{pr - 1}"].number_format = FMT_MOEDA_ZERO_TRACO
+    ws.conditional_formatting.add(f"J{ini_v}:K{pr - 1}", FormulaRule(formula=[f'ISNUMBER(SEARCH("atrasada",$J{ini_v}))'],
+                                                                       font=Font(color="FF" + P["negativo"], bold=True)))
+    pr += 1
+    secao_painel("DESCONTAR DEPOIS NO MÊS (só informação)")
+    for k in range(len(D.get("acertos_pessoas") or []) + 2):
+        linha_painel(None, None)
+        rr_ = pr - 1
+        ws[f"J{rr_}"] = f'=IFERROR(INDEX(PessoasDescontar,{k + 1})&"","")'
+        ws[f"K{rr_}"] = (f'=IF(J{rr_}="","",SUMIFS({L}[Valor],{L}[Situação],"Descontar Depois",{L}[Descontar de],J{rr_},'
+                         f'{L}[Mês],MesNum,{L}[Ano],AnoSelecionado))')
+        ws[f"K{rr_}"].number_format = FMT_MOEDA_ZERO_TRACO
+    linha_painel("sem nome", f'=SUMIFS({L}[Valor],{L}[Situação],"Descontar Depois",{L}[Descontar de],"",{L}[Mês],MesNum,{L}[Ano],AnoSelecionado)',
+                 fmt_=FMT_MOEDA_ZERO_TRACO)
+    pr += 1
     secao_painel("SEMÁFORO")
     for txt, cor, fundo in [("Pago / recebido", P["positivo"], None),
                             ("Pendente — vence em até 3 dias", P["texto"], misturar(P["alerta"], P["card"], 0.62)),
@@ -2178,7 +2087,8 @@ def construir(D, caminho):
         pr += 1
     pr += 1
     for rot_, alvo in [("✚  Novo lançamento", f'"#Lancamentos!B"&(ROWS({L}[Data])+{D["_linhas_importadas"][0]})'),
-                       ("✔  Contas do mês", '"#ContasMes!A1"'), ("⟳  Parcelar / repetir", '"#Parcelar!A1"'), ("⌂  Início", '"#Inicio!A1"')]:
+                       ("◉  Investimentos", '"#Investimentos!A1"'), ("◎  Planos 1 e 2", '"#Planos!A1"'),
+                       ("▦  Visão do ano", '"#\'Visão do ano\'!A1"')]:
         put(ws, f"J{pr}", f'=HYPERLINK({alvo},"{rot_}")', font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
         ws.merge_cells(f"J{pr}:K{pr}")
         ws.row_dimensions[pr].height = 24
@@ -2186,11 +2096,9 @@ def construir(D, caminho):
     D["_caderno"] = (faixas_slots, fim_cad)
 
     # ---------------------------------------------------------------- Potes (Alocação por Projeto × gasto)
+    # fica no topo da aba Investimentos (Correção IA: unir abas); a tabela de aplicações vem logo abaixo
     ws = ws_potes
-    pintar_fundo(ws, 16, 3)
-    titulo_aba(ws, "Potes", "O dinheiro guardado por finalidade. Categoria diz com o quê; pote (fundo) diz de qual dinheiro. "
-               "Você digita o Guardado e o % alvo (latão); o resto se calcula. O gasto vem dos lançamentos do ano do Caderno.", 12)
-    larguras(ws, {"A": 2, "B": 18, "C": 10, "D": 17, "E": 10, "F": 11, "G": 17, "H": 17, "I": 18, "J": 3, "K": 34, "L": 19})
+    put(ws, "B4", "POTES — guardado × gasto no ano (você digita o % alvo e o Guardado)", font=fnt(10, True, P["suave"]))
     HP = 5
     cab_p = ["Pote", "% alvo", "Guardado", "% real", "Desvio", "Gasto no ano", "Gasto no mês", "Guardou × gastou"]
     for j, h in enumerate(cab_p):
@@ -2244,25 +2152,7 @@ def construir(D, caminho):
         font=fnt(9, True, P["alerta"]), fmt=FMT_MOEDA, align=ALIGN_R)
     put(ws, f"B{tp + 4}", "Barra: quanto do dinheiro de cada pote ficou guardado frente ao que foi gasto no ano (cheia = guardou muito mais do que gastou).",
         font=fnt(9, color=P["suave"], italic=True))
-    # reequilíbrio (a Regra do Reequilíbrio do seu Guia — sempre como sugestão)
-    put(ws, "K4", "REEQUILÍBRIO — SUGESTÃO", font=fnt(10, True, P["suave"]))
-    put(ws, "K5", "Gastou algo e pagou com o dinheiro do próprio mês, sem resgatar? Some esse valor nos potes, na proporção do % alvo — "
-        "em vez de tirar tudo de um pote só. É só sugestão: você aprova atualizando o Guardado.",
-        font=fnt(9, color=P["suave"]), align=Alignment(wrap_text=True, vertical="top"))
-    ws.merge_cells("K5:L7")
-    put(ws, "K8", "Valor gasto e pago no mês", font=fnt(10, color=P["suave"]), fill_=CARD, align=ALIGN_L)
-    put(ws, "L8", 1000, font=fnt(11, True, P["destaque"]), fill_=CARD2, fmt=FMT_MOEDA, align=ALIGN_R, border=Border(bottom=side(P["destaque"])))
-    put(ws, "K9", "Pote", font=fnt(10, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_L)
-    put(ws, "L9", "Somar ao pote", font=fnt(10, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_R)
-    for i in range(len(potes)):
-        r = 10 + i
-        put(ws, f"K{r}", f"=B{HP + 1 + i}&\"  (\"&TEXT(C{HP + 1 + i}*100,\"0\")&\"%)  →  novo guardado \"", font=fnt(10), fill_=CARD, align=ALIGN_L)
-        ws[f"K{r}"] = f'=B{HP + 1 + i}'
-        put(ws, f"L{r}", f"=ROUND($L$8*N(C{HP + 1 + i}),2)", font=fnt(10, True, P["positivo"]), fill_=CARD, fmt=FMT_MOEDA, align=ALIGN_R)
-    r = 10 + len(potes)
-    put(ws, f"K{r}", "Novo total guardado", font=fnt(10, True), fill_=CARD2, align=ALIGN_L)
-    put(ws, f"L{r}", f"=D{tp}+SUM(L10:L{r - 1})", font=fnt(10, True), fill_=CARD2, fmt=FMT_MOEDA, align=ALIGN_R)
-    ws.freeze_panes = f"A{HP + 1}"
+    D["_potes_fim"] = tp + 4
 
     # ---------------------------------------------------------------- Correções IA (o seu canal de pedidos)
     ws = ws_corr
@@ -2279,9 +2169,16 @@ def construir(D, caminho):
                 if re.search(padrao, ped or "", re.I):
                     st, como = st_, como_.format(**cnt) if "{" in como_ else como_
                     break
+        if st and str(st).startswith("FEITO"):
+            for padrao, como_ in CORRECOES_ATUALIZAR:
+                if re.search(padrao, ped or "", re.I):
+                    como = como_
+                    break
         corr.append((ped, st, como))
     if not D.get("exemplo") and not any((c[0] or "").startswith(PEDIDO_JEITO_PLINIO[0][:40]) for c in corr):
         corr.append(PEDIDO_JEITO_PLINIO)
+    if not D.get("exemplo") and not any((c[0] or "").startswith(PEDIDO_UNIR_ABAS[0][:40]) for c in corr):
+        corr.append(PEDIDO_UNIR_ABAS)
     corr = corr or [(None, None, None)]
     HCo = 5
     for j, h in enumerate(["Pedido", "Status", "Como ficou"]):
@@ -2307,11 +2204,13 @@ def construir(D, caminho):
     ws.freeze_panes = f"A{HCo + 1}"
 
     # ---------------------------------------------------------------- Orçamento
+    # Visão do ano = Orçamento do mês (topo) + categorias × meses + histórico de todos os meses (Correção IA: unir abas)
     ws = ws_orc
-    pintar_fundo(ws, 10, 3)
-    titulo_aba(ws, "Orçamento", "Defina a meta mensal de cada categoria de gasto. O realizado acompanha o mês de trabalho escolhido no Caderno.", 7)
-    larguras(ws, {"A": 2, "B": 28, "C": 16, "D": 20, "E": 16, "F": 14, "G": 3, "H": 46})
-    put(ws, "H2", '="Mês de referência: "&MesSelecionado&" / "&AnoSelecionado', font=fnt(11, True, P["destaque"]), align=Alignment(vertical="center"))
+    pintar_fundo(ws, 18, 3)
+    titulo_aba(ws, "Visão do ano", "Só consulta: orçamento do mês, o ano por categoria e o histórico de todos os meses.", 17)
+    larguras(ws, {"A": 2, "B": 28, **{CL(3 + i): 16.5 for i in range(12)}, "O": 20, "P": 16.5, "Q": 16, "R": 2})
+    put(ws, "B4", '="ORÇAMENTO DO MÊS — "&UPPER(MesSelecionado)&" / "&AnoSelecionado&"   (a meta em latão você edita)"',
+        font=fnt(10, True, P["suave"]))
     HO = 5
     cab_orc = ["Categoria", "Meta mensal", "Realizado no mês selecionado", "Diferença", "% usado"]
     for j, h in enumerate(cab_orc):
@@ -2357,33 +2256,20 @@ def construir(D, caminho):
     regras_percentual(ws, f"F{HO + 1}:F{tot}", f"F{HO + 1}")
     ws.conditional_formatting.add(f"E{HO + 1}:E{tot}", FormulaRule(formula=[f"E{HO + 1}<0"], font=Font(color="FF" + P["negativo"])))
     dv_lista(ws, "=CatDespesa", f"B{HO + 1}:B{tot + 40}", msg="Use uma categoria de gasto cadastrada na aba Config.")
-    put(ws, "H5", "Legenda do % usado", font=fnt(10, True))
+    put(ws, f"H{HO}", "Legenda do % usado", font=fnt(10, True))
     for i, (txt, cor) in enumerate([("até 80% — dentro do planejado", P["positivo"]),
                                     ("80% a 100% — atenção", P["alerta"]),
                                     ("acima de 100% — estourou a meta", P["negativo"])]):
-        put(ws, f"H{6 + i}", "●  " + txt, font=fnt(10, color=cor))
-    caixa_ajuda(ws, "H", "H", 15, [
-        "Meta mensal = teto de gasto da categoria no mês.",
-        "Começou pela média dos seus últimos 12 meses.",
-        "Realizado = o que foi Pago no mês do Caderno.",
-        "Diferença + = ainda cabe; − = estourou.",
-        "% usado: verde até 80%, amarelo até 100%.",
-        "Mudar a meta: digite por cima do valor.",
-        "Categoria nova: Config + linha vazia aqui.",
-        "O Início mostra o % do orçamento usado."])
-    put(ws, "H10", D["nota_orcamento"], font=fnt(9, color=P["suave"], italic=True),
+        put(ws, f"H{HO + 1 + i}", "●  " + txt, font=fnt(10, color=cor))
+    put(ws, f"H{HO + 5}", D["nota_orcamento"], font=fnt(9, color=P["suave"], italic=True),
         align=Alignment(wrap_text=True, vertical="top"))
-    ws.merge_cells("H10:H13")
-    ws.freeze_panes = f"A{HO + 1}"
+    ws.merge_cells(f"H{HO + 5}:M{HO + 7}")
+    D["_orc_fim"] = tot
 
     # ---------------------------------------------------------------- Anual
     ws = ws_anual
-    pintar_fundo(ws, 20, 3)
-    titulo_aba(ws, "Visão anual", "Categorias × meses do ano do mês de trabalho (Caderno). Linhas vazias estão reservadas para categorias novas cadastradas na aba Config.", 17)
-    put(ws, "O2", '="Ano: "&AnoSelecionado', font=fnt(14, True, P["destaque"]), align=Alignment(horizontal="right", vertical="center"))
-    ws.merge_cells("O2:Q2")
-    larguras(ws, {"A": 2, "B": 26, **{CL(3 + i): 11.5 for i in range(12)}, "O": 14, "P": 13, "Q": 16, "R": 2})
-    HA = 5
+    HA = D["_orc_fim"] + 4
+    put(ws, f"B{HA - 1}", '="O ANO POR CATEGORIA — "&AnoSelecionado', font=fnt(10, True, P["suave"]))
     for j, h in enumerate(["Categoria"] + MESES_ABREV + ["Total", "Média mensal", "Tendência"]):
         ws.cell(HA, 2 + j, h)
     estilo_cabecalho(ws, HA, 2, 17)
@@ -2458,7 +2344,7 @@ def construir(D, caminho):
     area(ws, f"C{r}:P{r}", align=ALIGN_R)
     ws.cell(r, 2).alignment = ALIGN_L
     ws.cell(r, 16).value = None
-    ws.freeze_panes = f"C{HA + 1}"
+    D["_anual_fim"] = r
     ws.conditional_formatting.add(f"C{des_ini}:N{des_fim}", ColorScaleRule(
         start_type="num", start_value=0, start_color="FF" + P["card"],
         end_type="max", end_color="FF" + P["heat_max"]))
@@ -2468,14 +2354,8 @@ def construir(D, caminho):
     # ---------------------------------------------------------------- Histórico (mês a mês, todos os anos)
     ws = ws_hist
     nh = len(cab_h)
-    pintar_fundo(ws, nh + 3, 3)
-    titulo_aba(ws, "Histórico mês a mês", "Todos os meses, com a mesma regra do caderno (só entra o que tem 'Conta no mês?' = sim). "
-               "Fechamento: depois de conferir o mês no Caderno, escreva a data em \"Conferido em\" — é o seu ritual de declarar que revisou.", nh)
-    ws.column_dimensions["A"].width = 2
-    ws.column_dimensions["B"].width = 12
-    for j in range(1, nh):
-        ws.column_dimensions[CL(2 + j)].width = 17
-    HH = 5
+    HH = D["_anual_fim"] + 4
+    put(ws, f"B{HH - 1}", "HISTÓRICO — todos os meses (quando revisar um mês, escreva a data em Conferido em)", font=fnt(10, True, P["suave"]))
     for j, h in enumerate(cab_h):
         ws.cell(HH, 2 + j, h)
     estilo_cabecalho(ws, HH, 2, nh + 1)
@@ -2528,57 +2408,7 @@ def construir(D, caminho):
                          prompt="Depois de conferir o mês no Caderno, digite a data (Ctrl+; põe a de hoje).")
     ws.add_data_validation(dvc)
     dvc.add(f"{cconf}{HH + 1}:{cconf}{fim_h}")
-    ws.freeze_panes = f"C{HH + 1}"
     D["_hist"] = (HH, fim_h)
-
-    # ---------------------------------------------------------------- Parcelamentos em andamento (na aba Parcelar)
-    # Correção IA: a aba Metas saiu (virou Plano 1 e Plano 2); os parcelamentos ficaram junto do Parcelar.
-    ws = ws_parc
-    HM = 4 + NPARC + 4
-    put(ws, f"{CL(PC)}{HM - 1}", "PARCELAMENTOS EM ANDAMENTO — atualize \"Parcelas pagas\" quando pagar uma parcela",
-        font=fnt(10, True, P["suave"]))
-    cab_d = ["Descrição", "Valor da parcela", "Parcelas pagas", "Total de parcelas", "Saldo devedor", "Data de término"]
-    f_sd = "=N(tbDividas[[#This Row],[Valor da parcela]])*MAX(0,N(tbDividas[[#This Row],[Total de parcelas]])-N(tbDividas[[#This Row],[Parcelas pagas]]))"
-    dividas = D["dividas"] or [(None, None, None, None, None)]
-    c0 = PC
-    for j, h in enumerate(cab_d):
-        ws.cell(HM, c0 + j, h)
-    estilo_cabecalho(ws, HM, c0, c0 + 5)
-    ws.row_dimensions[HM].height = 32
-    estilo_corpo(ws, HM + 1, HM + len(dividas) + 1, c0, c0 + 5)
-    for i, (desc_d, parc, pagas, total, fim) in enumerate(dividas):
-        r = HM + 1 + i
-        for j, v in enumerate((desc_d, parc, pagas, total)):
-            ws.cell(r, c0 + j, v)
-        ws.cell(r, c0 + 4, f_sd)
-        ws.cell(r, c0 + 5, fim)
-    td = HM + len(dividas) + 1
-    ws.cell(td, c0, "Total")
-    ws.cell(td, c0 + 1, "=SUBTOTAL(109,tbDividas[Valor da parcela])")
-    ws.cell(td, c0 + 4, "=SUBTOTAL(109,tbDividas[Saldo devedor])")
-    area(ws, f"{CL(c0)}{td}:{CL(c0 + 5)}{td}", fill_=CARD2, font=fnt(10, True), border=Border(top=side(P["destaque"])))
-    for r in range(HM + 1, td + 1):
-        for j in (1, 4):
-            ws.cell(r, c0 + j).number_format = FMT_MOEDA
-            ws.cell(r, c0 + j).alignment = ALIGN_R
-        for j in (2, 3):
-            ws.cell(r, c0 + j).alignment = ALIGN_C
-        ws.cell(r, c0 + 5).number_format = FMT_DATA
-        ws.cell(r, c0 + 5).alignment = ALIGN_C
-    nova_tabela(ws, "tbDividas", f"{CL(c0)}{HM}:{CL(c0 + 5)}{td}", cab_d, formulas={"Saldo devedor": f_sd},
-                totais={"Descrição": "Total", "Valor da parcela": "sum", "Saldo devedor": "sum"})
-    put(ws, f"B{r0 + 7}", f'=HYPERLINK("#Parcelar!{CL(c0)}{HM}","▼  Parcelamentos em andamento")', font=fnt(11, True, P["destaque"]),
-        fill_=CARD2, align=ALIGN_C)
-    caixa_ajuda(ws, "B", "C", r0 + 9, [
-        "Compra parcelada sem digitar linha por linha.",
-        "1. Preencha os campos em latão (acima).",
-        "2. À direita saem as linhas 1/n, 2/n, 3/n…",
-        "3. Copie as linhas preenchidas (Ctrl+C).",
-        "4. ✚ leva à 1ª linha vazia de Lançamentos.",
-        "5. Cole só os valores: Ctrl+Shift+V.",
-        "Futuras = Pendente: só contam quando pagas.",
-        "Repetir todo mês: aluguel, mesada, assinatura.",
-        "Parcelamentos em andamento: link acima."])
 
     # ---------------------------------------------------------------- Investimentos (vivo: rende sozinho)
     # Correção IA: "como ficaria a inserção dos investimentos?" — uma linha por aplicação; Dias, Alíquota IR,
@@ -2588,14 +2418,13 @@ def construir(D, caminho):
     cab_i = CAB_INV
     inv = D.get("investimentos") or [[None] * len(CAB_INV)]
     ni = len(cab_i)
-    pintar_fundo(ws, ni + 8, 3)
-    titulo_aba(ws, "Investimentos", "Uma linha por aplicação. Digite Data, Banco, % do CDI e Aplicado (latão); Saldo hoje, IR e Líquido "
-               "se calculam sozinhos com o Histórico do CDI da aba Planos. Resgate total: Resgatado = sim. Resgate parcial: linha com valor negativo.", ni)
+    titulo_aba(ws, "Investimentos e potes", "Aplicou? Uma linha na tabela de baixo: Data, Banco, % do CDI e Aplicado. O resto se calcula.", ni)
     ws.column_dimensions["A"].width = 2
     larg_i = {"Data": 12, "Banco": 11, "% do CDI": 10, "Aplicado": 15, "Dias": 7, "Isento": 8, "Resgatado": 10,
               "Alíquota IR": 10, "Saldo hoje": 15, "IR": 12, "Líquido": 15, "Vencimento": 12, "Observação": 40,
               "Base (app)": 14, "Data da base": 12}
-    HI = 5
+    HI = D["_potes_fim"] + 3
+    put(ws, f"B{HI - 1}", "APLICAÇÕES — uma linha por aplicação", font=fnt(10, True, P["suave"]))
     ti = lambda c: f"tbInvestimentos[[#This Row],[{c}]]"
     pct_i = f'IF(N({ti("% do CDI")})>5,N({ti("% do CDI")})/100,N({ti("% do CDI")}))'
     base_i = f'IF(N({ti("Base (app)")})<>0,{ti("Base (app)")},N({ti("Aplicado")}))'
@@ -2617,9 +2446,10 @@ def construir(D, caminho):
         "IR": f'=IF(N({ti("Saldo hoje")})<=0,0,MAX(0,{ti("Saldo hoje")}-N({ti("Aplicado")}))*N({ti("Alíquota IR")}))',
         "Líquido": f'=N({ti("Saldo hoje")})-N({ti("IR")})',
     }
+    larg_potes = [18, 10, 17, 10, 11, 17, 17, 18]          # colunas B–I também servem aos Potes
     for j, h in enumerate(cab_i):
         ws.cell(HI, 2 + j, h)
-        ws.column_dimensions[CL(2 + j)].width = larg_i.get(h, 12)
+        ws.column_dimensions[CL(2 + j)].width = max(larg_i.get(h, 12), larg_potes[j] if j < len(larg_potes) else 0)
     estilo_cabecalho(ws, HI, 2, ni + 1)
     for h in f_inv:
         ws.cell(HI, 2 + cab_i.index(h)).fill = fill(misturar(P["roxo"], P["card"], 0.55 if TEMA == "plinio_escuro" else 0.15))
@@ -2681,19 +2511,8 @@ def construir(D, caminho):
             fill_=CARD, fmt=fmt_, align=ALIGN_R)
     area(ws, f"{CL(cx)}5:{CL(cx + 1)}5", fill_=CARD, border=Border(top=side(P["positivo"], "thick")))
     D["_ref_invest"] = f"Investimentos!{CL(cx + 1)}8"
-    caixa_ajuda(ws, CL(cx), CL(cx + 1), 15, [
-        "1ª linha vazia da tabela, digite:",
-        "Data (Alt+↓ = hoje) · Banco",
-        "% do CDI (110%) · Aplicado",
-        "Isento = sim em LCI/LCA/poupança.",
-        "O resto se calcula sozinho, todo dia.",
-        "Reaplicação: escreva na Observação.",
-        "Resgate total: Resgatado = sim.",
-        "Resgate parcial: linha negativa.",
-        "Aporte do mês vem daqui (não lance",
-        "de novo em Lançamentos)."],
-        titulo="COMO LANÇAR UM INVESTIMENTO")
-    ws.freeze_panes = f"C{HI + 1}"
+    put(ws, f"{CL(cx)}14", "Reaplicação: escreva \"Reaplicação\" na Observação.", font=fnt(9, color=P["suave"], italic=True))
+    put(ws, f"{CL(cx)}15", "Resgate total: Resgatado = sim · parcial: valor negativo.", font=fnt(9, color=P["suave"], italic=True))
 
     # ---------------------------------------------------------------- Plano 1 e Plano 2 (como na Finanças Família 3.0)
     PL = D["planos"]
@@ -2821,7 +2640,7 @@ def construir(D, caminho):
     ws.conditional_formatting.add(f"B{HP + 1}:H{HP + NP1}", FormulaRule(formula=[f'$H{HP + 1}="INDEPENDENTE"'],
                                                                         font=Font(color="FF" + P["positivo"], bold=True)))
     put(ws, "D14", '=HYPERLINK("#Investimentos!A1","◉  Investimentos ➜")', font=fnt(11, True, P["cabecalho_txt"]), fill_=HEAD, align=ALIGN_C)
-    put(ws, "D15", '=HYPERLINK("#Inicio!A1","⌂  Início")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
+    put(ws, "D15", '=HYPERLINK("#\'Mês\'!A1","⌂  Mês")', font=fnt(11, True, P["destaque"]), fill_=CARD2, align=ALIGN_C)
 
     # ---- Plano 2 (mesma aba, à direita)
     put(ws, "M4", "CARREIRA (você edita — em ordem de data)", font=fnt(10, True, P["suave"]))
@@ -2890,275 +2709,7 @@ def construir(D, caminho):
                                                                         font=Font(color="FF" + P["positivo"], bold=True)))
     put(ws, f"B{HP - 1}", f"PLANO 1 — PROJEÇÃO DE {NP1} MESES (juro líquido reinvestido + aporte todo mês)", font=fnt(10, True, P["suave"]))
 
-    # ---------------------------------------------------------------- Acertos (Descontar Depois, por pessoa)
-    # Correção IA: "quando coloco Descontar Depois, preciso colocar o nome da pessoa, pra fazer o cálculo automático".
-    # Tudo aqui vem dos lançamentos do mês de trabalho (Caderno) com Situação = Descontar Depois e o nome em "Descontar de".
-    ws = ws_ac
-    lc_ac = D["_col_lanc"]
-    pintar_fundo(ws, 16, 3)
-    titulo_aba(ws, "Acertos — Descontar Depois", "Tudo o que você lançou como Descontar Depois no mês de trabalho do Caderno, somado por pessoa "
-               "(coluna \"Descontar de\" em Lançamentos). Quando a pessoa pagar, registre em Recebidos.", 14)
-    larguras(ws, {"A": 2, "B": 18, "C": 26, "D": 17, "E": 15, "F": 16, "G": 3, "H": 13, "I": 16, "J": 14, "K": 13, "L": 13,
-                  "M": 32, "N": 16, "O": 2, "P": 12})
-    ws.column_dimensions["P"].hidden = True
-    put(ws, "B4", '="POR PESSOA — "&UPPER(MesSelecionado)&" / "&AnoSelecionado', font=fnt(10, True, P["suave"]))
-    cab_a = ["Pessoa", "Descontar Depois no mês", "A cobrar no mês", "Já recebido", "Falta"]
-    pessoas_ac = D.get("acertos_pessoas") or [None]
-    rateios = {k.lower(): (k, v) for k, v in (D.get("rateios") or {}).items()}
-    HAc = 5
-    for j, h in enumerate(cab_a):
-        ws.cell(HAc, 2 + j, h)
-    estilo_cabecalho(ws, HAc, 2, 6)
-    ws.row_dimensions[HAc].height = 36
-    estilo_corpo(ws, HAc + 1, HAc + len(pessoas_ac), 2, 6)
-    ta = lambda c: f"tbAcertos[[#This Row],[{c}]]"
-    mes_ini, mes_fim = "DATE(AnoSelecionado,MesNum,1)", "EOMONTH(DATE(AnoSelecionado,MesNum,1),0)"
-    f_dd = (f'=IF({ta("Pessoa")}="",0,SUMIFS({L}[Valor],{L}[Situação],"Descontar Depois",{L}[Descontar de],{ta("Pessoa")},'
-            f'{L}[Mês],MesNum,{L}[Ano],AnoSelecionado))')
-    f_rec = (f'=IF({ta("Pessoa")}="",0,SUMIFS(tbRecebidos[Valor],tbRecebidos[Pessoa],{ta("Pessoa")},'
-             f'tbRecebidos[Mês de referência],">="&{mes_ini},tbRecebidos[Mês de referência],"<="&{mes_fim}))')
-    f_falta = f'=N({ta("A cobrar no mês")})-N({ta("Já recebido")})'
-    rateio_de = {}
-    for i, pessoa in enumerate(pessoas_ac):
-        r = HAc + 1 + i
-        put(ws, f"B{r}", pessoa, font=fnt(10, True, P["destaque"]), fill_=CARD2)
-        ws.cell(r, 3, f_dd)
-        ws.cell(r, 4, f"={ta('Descontar Depois no mês')}")
-        if pessoa and pessoa.lower() in rateios:
-            rateio_de[pessoa] = r
-        ws.cell(r, 5, f_rec)
-        ws.cell(r, 6, f_falta)
-        for colx in range(3, 7):
-            ws.cell(r, colx).number_format = FMT_MOEDA
-            ws.cell(r, colx).alignment = ALIGN_R
-        ws.cell(r, 6).font = fnt(11, True, P["alerta"])
-    fim_a = HAc + len(pessoas_ac)
-    nova_tabela(ws, "tbAcertos", f"B{HAc}:F{fim_a}", cab_a,
-                formulas={"Descontar Depois no mês": f_dd, "A cobrar no mês": f"={ta('Descontar Depois no mês')}",
-                          "Já recebido": f_rec, "Falta": f_falta})
-    wb.defined_names["PessoasDescontar"] = DefinedName(
-        "PessoasDescontar", attr_text=f"OFFSET(Acertos!$B${HAc + 1},0,0,MAX(1,SUMPRODUCT(--(LEN(Acertos!$B${HAc + 1}:$B${HAc + 200})>0))),1)")
-    r = fim_a + 1
-    put(ws, f"B{r}", "Descontar Depois sem nome no mês", font=fnt(9, color=P["suave"]), align=ALIGN_L)
-    ws.merge_cells(f"B{r}:C{r}")
-    put(ws, f"D{r}", f'=SUMIFS({L}[Valor],{L}[Situação],"Descontar Depois",{L}[Descontar de],"",{L}[Mês],MesNum,{L}[Ano],AnoSelecionado)',
-        font=fnt(10, True), fmt=FMT_MOEDA, align=ALIGN_R)
-    ws.conditional_formatting.add(f"D{r}", FormulaRule(formula=[f"D{r}>0"], font=Font(color="FF" + P["negativo"], bold=True)))
-    put(ws, f"B{r + 1}", "Pessoa nova? Escreva o nome na linha vazia logo abaixo da tabela e use o mesmo nome em \"Descontar de\".",
-        font=fnt(9, color=P["suave"], italic=True))
-    D["_ref_receber"] = "SUM(tbAcertos[Falta])"
-
-    # detalhe do mês (mesma técnica do Caderno)
-    DT = r + 4
-    put(ws, f"B{DT - 1}", "DESCONTAR DEPOIS DO MÊS — lançamento a lançamento", font=fnt(10, True, P["suave"]))
-    for j, h in enumerate(["Data", "Descrição", "Valor", "Descontar de", "Parcela"]):
-        ws.cell(DT, 2 + j, h)
-    estilo_cabecalho(ws, DT, 2, 6)
-    NDT = 60
-    for k in range(1, NDT + 1):
-        rr = DT + k
-        ws[f"P{rr}"] = ArrayFormula(f"P{rr}", f'=IFERROR(SMALL(IF(({L}[Situação]="Descontar Depois")*({L}[Mês]=MesNum)*({L}[Ano]=AnoSelecionado),'
-                                               f'IF({L}[Data]="",0,{L}[Data])*100000+ROW({L}[Data])),{k}),0)')
-        lin = f"MOD($P{rr},100000)"
-        for j, rot in enumerate(["Data", "Descrição", "Valor", "Descontar de", "Parcela"]):
-            fonte = f"INDEX(Lancamentos!${lc_ac[rot]}:${lc_ac[rot]},{lin})"
-            c_ = ws.cell(rr, 2 + j, f'=IF($P{rr}=0,"",IF({fonte}="","",{fonte}))' if rot in ("Data", "Valor") else f'=IF($P{rr}=0,"",{fonte}&"")')
-            c_.fill, c_.font, c_.border = CARD, fnt(10), Border(bottom=side(P["borda"]))
-            c_.alignment = ALIGN_R if rot == "Valor" else ALIGN_L
-            if rot == "Data":
-                c_.number_format = FMT_DATA
-            if rot == "Valor":
-                c_.number_format = FMT_MOEDA
-        ws.row_dimensions[rr].height = 18
-    ws.conditional_formatting.add(f"E{DT + 1}:E{DT + NDT}", FormulaRule(formula=[f'AND($C{DT + 1}<>"",$E{DT + 1}="")'],
-                                                                       fill=fill(misturar(P["negativo"], P["card"], 0.55))))
-
-    # Recebidos
-    put(ws, "H4", "RECEBIDOS (quando a pessoa pagar)", font=fnt(10, True, P["suave"]))
-    cab_r = ["Data", "Pessoa", "Valor", "Referente a (mês)", "Mês de referência"]
-    recs = D.get("recebidos") or [[None] * 4]
-    for j, h in enumerate(cab_r):
-        ws.cell(HAc, 8 + j, h)
-    estilo_cabecalho(ws, HAc, 8, 12)
-    estilo_corpo(ws, HAc + 1, HAc + len(recs), 8, 12)
-    tr_ = lambda c: f"tbRecebidos[[#This Row],[{c}]]"
-    f_ref = (f'=IF(N({tr_("Referente a (mês)")})>0,DATE(YEAR({tr_("Referente a (mês)")}),MONTH({tr_("Referente a (mês)")}),1),'
-             f'IF(N({tr_("Data")})>0,DATE(YEAR({tr_("Data")}),MONTH({tr_("Data")}),1),""))')
-    for i, rec in enumerate(recs):
-        rr = HAc + 1 + i
-        for j, v in enumerate(rec[:4]):
-            ws.cell(rr, 8 + j, v)
-        ws.cell(rr, 12, f_ref)
-    for rr in range(HAc + 1, HAc + len(recs) + 300):
-        ws.cell(rr, 8).number_format = FMT_DATA
-        ws.cell(rr, 10).number_format = FMT_MOEDA
-        ws.cell(rr, 11).number_format = FMT_COMPETENCIA
-        ws.cell(rr, 12).number_format = FMT_COMPETENCIA
-    nova_tabela(ws, "tbRecebidos", f"H{HAc}:L{HAc + len(recs)}", cab_r, formulas={"Mês de referência": f_ref})
-    dv_lista(ws, "=PessoasDescontar", f"I{HAc + 1}:I{HAc + 400}", msg="Escolha uma pessoa da tabela ao lado.")
-    dvr = DataValidation(type="list", formula1="=DatasRapidas", allow_blank=True, showErrorMessage=False,
-                         showInputMessage=True, promptTitle="Data", prompt="Alt+↓ e Enter = hoje.")
-    ws.add_data_validation(dvr)
-    dvr.add(f"H{HAc + 1}:H{HAc + 400}")
-    put(ws, f"H{HAc + len(recs) + 2}", "Referente a (mês) vazio = o mês da data do recebimento.", font=fnt(9, color=P["suave"], italic=True))
-
-    # Rateio (a mesma conta do app, com os gastos do mês de quem divide a casa)
-    linha = 5
-    for pessoa, rr_p in rateio_de.items():
-        _, vals = rateios[pessoa.lower()]
-        put(ws, f"M{linha - 1}", f"RATEIO — {pessoa.upper()}", font=fnt(10, True, P["suave"]))
-        ini = linha
-        passos = [("Aluguel dele (digite)", vals.get("aluguel dele")),
-                  ("Aluguel dela (digite)", vals.get("aluguel dela")),
-                  ("Gastos da casa (Descontar Depois)", f"=C{rr_p}"),
-                  ("Lucro", f"=N{ini}+N{ini + 1}-N{ini + 2}"),
-                  ("Metade do lucro", f"=N{ini + 3}/2"),
-                  ("Total a cobrar", f"=N{ini + 1}-N{ini + 4}")]
-        for j, (rot, v) in enumerate(passos):
-            rr = ini + j
-            final = j == len(passos) - 1
-            put(ws, f"M{rr}", rot, font=fnt(10, final, P["texto"] if final else P["suave"]), fill_=CARD2 if final else CARD, align=ALIGN_L)
-            put(ws, f"N{rr}", v, font=fnt(11 if final else 10, final, P["alerta"] if final else (P["destaque"] if j < 2 else P["texto"])),
-                fill_=CARD2 if final else CARD, fmt=FMT_MOEDA, align=ALIGN_R)
-        ws.cell(rr_p, 4).value = f"=N{ini + len(passos) - 1}"
-        put(ws, f"M{ini + len(passos)}", f"A cobrar de {pessoa} = este total (em vez da soma simples).", font=fnt(9, color=P["suave"], italic=True))
-        linha = ini + len(passos) + 3
-    ws.freeze_panes = f"A{HAc + 1}"
-
-    # Dashboard retirado (Correção IA: "com a aba Caderno não precisa a aba Dashboard").
-    # A grade de 6 cartões continua servindo à aba Início.
-    card_cols = []
-    colx = 2
-    for k in range(6):
-        card_cols.append((colx, colx + 2))
-        colx += 4
-    ult_col = card_cols[-1][1] + 1
-    c5, c6 = card_cols[4], card_cols[5]
-
-    # ---------------------------------------------------------------- Início (central da família)
-    ws = ws_ini
-    pintar_fundo(ws, ult_col + 6, 45)
-    ws.column_dimensions["A"].width = 3
-    for c0, c1 in card_cols:
-        for cc in range(c0, c1 + 1):
-            ws.column_dimensions[CL(cc)].width = LARG_CARD
-        ws.column_dimensions[CL(c1 + 1)].width = 2.5
-    ws.column_dimensions[CL(ult_col)].width = 3
-    ws.sheet_view.zoomScale = 90
-    for rrow, h in {1: 12, 2: 26, 3: 28, 4: 14}.items():
-        ws.row_dimensions[rrow].height = h
-    put(ws, "B2", "Central da Família", font=fnt(20, True), align=Alignment(vertical="bottom"))
-    put(ws, "B3", "Tudo do dia a dia num lugar só: lance, confira as contas do mês e acompanhe o que vence.",
-        font=fnt(9, color=P["suave"]), align=Alignment(vertical="center"))
-    put(ws, f"{CL(c5[0])}2", "MÊS DE TRABALHO", font=fnt(9, True, P["suave"]), align=Alignment(vertical="bottom", indent=1))
-    mesclar(ws, f"{CL(c5[0])}3:{CL(c5[1])}3", '=MesSelecionado&" / "&AnoSelecionado', fill_=CARD2, font=fnt(13, True, P["destaque"]),
-            align=ALIGN_C, border=Border(bottom=side(P["destaque"], "medium")))
-    mesclar(ws, f"{CL(c6[0])}3:{CL(c6[1])}3", '=HYPERLINK("#Caderno!J3","trocar no Caderno ➜")', fill_=CARD,
-            font=fnt(10, True, P["suave"]), align=ALIGN_C)
-    ws.freeze_panes = "A5"
-    # Botões
-    prox = f'"#Lancamentos!B"&(ROWS({L}[Data])+{D["_linhas_importadas"][0]})'
-    botoes = [(f'=HYPERLINK({prox},"✚  Novo lançamento")', P["destaque"]),
-              ('=HYPERLINK("#Caderno!A1","📒  Caderno do mês")', P["positivo"]),
-              ('=HYPERLINK("#ContasMes!A1","✔  Contas do mês")', P["azul"]),
-              ('=HYPERLINK("#Parcelar!A1","⟳  Parcelar / repetir")', P["roxo"]),
-              ('=HYPERLINK("#Potes!A1","◉  Potes")', misturar(P["positivo"], P["card"], 0.35)),
-              ("=HYPERLINK(\"#'Planos'!A1\",\"◎  Plano 1 e 2\")", misturar(P["azul"], P["card"], 0.35))]
-    for rrow in (5, 6, 7):
-        ws.row_dimensions[rrow].height = 16
-    for (c0, c1), (f, cor) in zip(card_cols, botoes):
-        mesclar(ws, f"{CL(c0)}5:{CL(c1)}7", f, fill_=fill(cor), font=fnt(12, True, P["botao_txt"]), align=ALIGN_C)
-    ws.row_dimensions[8].height = 14
-    # Status do mês
-    receber = D.get("_ref_receber") or "0"
-    invest = D.get("_ref_invest") or "0"
-    resumo_c = D["_contas_resumo"]
-    status = [
-        ("SALDO LIVRE DO MÊS", "=Calc!B32", FMT_MOEDA, "Resultado", "=Calc!B13", FMT_MOEDA, P["destaque"]),
-        ("CONTAS FIXAS LANÇADAS", f"=ContasMes!{resumo_c[0]}", None, "Falta", f"=ContasMes!{resumo_c[1]}", FMT_MOEDA, P["positivo"]),
-        ("A PAGAR NO MÊS", "=Calc!B28", FMT_MOEDA, "Atrasadas", "=Calc!B29", "0", P["alerta"]),
-        ("% COMPROMETIDO DA RENDA", "=Calc!B33", FMT_PCT, "Orçam.", "=Calc!B18", FMT_PCT, P["roxo"]),
-        ("A RECEBER (ACERTOS)", f"={receber}", FMT_MOEDA, "Parcelas", "=SUM(tbDividas[Saldo devedor])", FMT_MOEDA, P["alerta"]),
-        ("INVESTIMENTOS (LÍQUIDO)", f"={invest}", FMT_MOEDA, "Plano 1", "=Plano1Pct", FMT_PCT, P["positivo"]),
-    ]
-    for rrow, h in {9: 8, 10: 20, 11: 34, 12: 18, 13: 10, 14: 18}.items():
-        ws.row_dimensions[rrow].height = h
-    st_cells = []
-    for (c0, c1), (rot, f, fmt, sub, fsub, fmtsub, cor) in zip(card_cols, status):
-        a, b = CL(c0), CL(c1)
-        area(ws, f"{a}9:{b}13", fill_=CARD)
-        area(ws, f"{a}9:{b}9", border=Border(top=side(cor, "thick")))
-        mesclar(ws, f"{a}10:{b}10", rot, fill_=CARD, font=fnt(9, True, P["suave"]), align=Alignment(horizontal="left", vertical="center", indent=1))
-        mesclar(ws, f"{a}11:{b}11", f, fill_=CARD, font=fnt(KPI_PT - 2, True), fmt=fmt, align=Alignment(horizontal="left", vertical="center", indent=1))
-        put(ws, f"{a}12", sub, font=fnt(9, color=P["suave"]), fill_=CARD, align=Alignment(horizontal="left", vertical="center", indent=1))
-        mesclar(ws, f"{CL(c0 + 1)}12:{b}12", fsub, fill_=CARD, font=fnt(9, True, P["suave"]), fmt=fmtsub, align=Alignment(horizontal="right", vertical="center", indent=1))
-        st_cells.append(f"{a}11")
-    ws.conditional_formatting.add(st_cells[0], FormulaRule(formula=[f"{st_cells[0]}<0"], font=Font(color="FF" + P["negativo"], bold=True)))
-    ws.conditional_formatting.add(st_cells[0], FormulaRule(formula=[f"{st_cells[0]}>=0"], font=Font(color="FF" + P["positivo"], bold=True)))
-    ws.conditional_formatting.add(st_cells[2], FormulaRule(formula=[f"{st_cells[2]}>0"], font=Font(color="FF" + P["alerta"], bold=True)))
-    o = st_cells[3]
-    ws.conditional_formatting.add(o, FormulaRule(formula=[f"{o}>1"], font=Font(color="FF" + P["negativo"], bold=True)))
-    ws.conditional_formatting.add(o, FormulaRule(formula=[f"AND({o}>0.8,{o}<=1)"], font=Font(color="FF" + P["alerta"], bold=True)))
-    ws.conditional_formatting.add(o, FormulaRule(formula=[f"{o}<=0.8"], font=Font(color="FF" + P["positivo"], bold=True)))
-    ws.conditional_formatting.add("G12:H12", FormulaRule(formula=["G12>0"], font=Font(color="FF" + P["negativo"], bold=True)))
-    ws.conditional_formatting.add("K12:L12", FormulaRule(formula=["K12>0"], font=Font(color="FF" + P["negativo"], bold=True)))
-    # Listas: próximos vencimentos / últimos lançamentos
-    T = 15
-    ws.row_dimensions[T].height = 26
-    ws.row_dimensions[T + 1].height = 24
-    put(ws, f"B{T}", "Próximos vencimentos e atrasados", font=fnt(12, True), align=Alignment(vertical="center"))
-    put(ws, f"N{T}", "Últimos lançamentos", font=fnt(12, True), align=Alignment(vertical="center"))
-    for rot, a, b in [("Vence", "B", "C"), ("Descrição", "D", "H"), ("Valor", "I", "J"), ("Status", "K", "L")]:
-        mesclar(ws, f"{a}{T + 1}:{b}{T + 1}", rot, fill_=HEAD, font=fnt(10, True, P["cabecalho_txt"]), align=ALIGN_R if rot == "Valor" else ALIGN_L)
-    for rot, a, b in [("Data", "N", "O"), ("Descrição", "P", "T"), ("Categoria", "U", "V"), ("Valor", "W", "X")]:
-        mesclar(ws, f"{a}{T + 1}:{b}{T + 1}", rot, fill_=HEAD, font=fnt(10, True, P["cabecalho_txt"]), align=ALIGN_R if rot == "Valor" else ALIGN_L)
-    bb = Border(bottom=side(P["borda"]))
-    for k in range(8):
-        r = T + 2 + k
-        cr = 2 + k
-        ws.row_dimensions[r].height = 21
-        mesclar(ws, f"B{r}:C{r}", f"=Calc!AW{cr}", fill_=CARD, font=fnt(10, color=P["suave"]), fmt=FMT_DATA, align=ALIGN_L, border=bb)
-        mesclar(ws, f"D{r}:H{r}", f"=Calc!AX{cr}", fill_=CARD, font=fnt(10), align=ALIGN_L, border=bb)
-        mesclar(ws, f"I{r}:J{r}", f"=Calc!AY{cr}", fill_=CARD, font=fnt(10, True), fmt=FMT_MOEDA, align=ALIGN_R, border=bb)
-        mesclar(ws, f"K{r}:L{r}", f"=Calc!AZ{cr}", fill_=CARD, font=fnt(10, True, P["suave"]), align=ALIGN_L, border=bb)
-        mesclar(ws, f"N{r}:O{r}", f"=Calc!BC{cr}", fill_=CARD, font=fnt(10, color=P["suave"]), fmt=FMT_DATA, align=ALIGN_L, border=bb)
-        mesclar(ws, f"P{r}:T{r}", f"=Calc!BD{cr}", fill_=CARD, font=fnt(10), align=ALIGN_L, border=bb)
-        mesclar(ws, f"U{r}:V{r}", f"=Calc!BF{cr}", fill_=CARD, font=fnt(10, color=P["suave"]), align=ALIGN_L, border=bb)
-        mesclar(ws, f"W{r}:X{r}", f"=Calc!BE{cr}", fill_=CARD, font=fnt(10, True), fmt=FMT_MOEDA, align=ALIGN_R, border=bb)
-    fim_l = T + 9
-    ws.conditional_formatting.add(f"K{T + 2}:L{fim_l}", FormulaRule(formula=[f'$K{T + 2}="Atrasada"'], font=Font(color="FF" + P["negativo"], bold=True)))
-    ws.conditional_formatting.add(f"K{T + 2}:L{fim_l}", FormulaRule(formula=[f'$K{T + 2}="Esta semana"'], font=Font(color="FF" + P["alerta"], bold=True)))
-    ws.conditional_formatting.add(f"W{T + 2}:X{fim_l}", FormulaRule(formula=[f'Calc!$BG{2}="Receita"'], font=Font(color="FF" + P["positivo"], bold=True)))
-    # Guia rápido
-    G0 = fim_l + 2
-    put(ws, f"B{G0}", "Lançar em 10 segundos", font=fnt(12, True))
-    passos = ["1.  ✚ Novo lançamento (botão acima) leva à primeira linha vazia.",
-              "2.  Data: Alt+↓ e Enter põe HOJE (ou Ctrl+;)  →  Tab.",
-              "3.  Descrição: escolha um favorito (Alt+↓) ou digite  →  Tab.",
-              "4.  Valor  →  Enter. Tipo, Categoria, Situação e Pote se preenchem sozinhos.",
-              "5.  Conta futura? Troque a Situação para Pendente; ela aparece em Próximos vencimentos.",
-              "Compra parcelada ou lançamento que se repete? Use  ⟳ Parcelar / repetir."]
-    for i, t in enumerate(passos):
-        put(ws, f"B{G0 + 1 + i}", t, font=fnt(10, color=P["texto"] if i < 5 else P["suave"], italic=i == 5))
-    put(ws, f"N{G0}", "Rotina da família", font=fnt(12, True))
-    rotina = ["Toda semana: lançar os gastos (5 min) e olhar o 📒 Caderno do mês.",
-              "Quando pagar uma conta: trocar Pendente ➜ Pago em Lançamentos.",
-              "Início do mês: trocar o Mês de trabalho no Caderno e colar o bloco de ✔ Contas do mês.",
-              "Fim do mês: Conferência do mês no Caderno ➜ data em \"Conferido em\" no Histórico.",
-              "Pedidos pra IA: aba 🤖 Correções IA. Potes: atualize o Guardado quando aplicar.",
-              "Atalhos úteis: Ctrl+D copia a célula de cima • Alt+↓ abre a lista • Ctrl+↓ vai ao fim."]
-    for i, t in enumerate(rotina):
-        put(ws, f"N{G0 + 1 + i}", t, font=fnt(10, color=P["texto"] if i < 5 else P["suave"], italic=i == 5))
-    ws.print_area = f"A1:{CL(ult_col)}{G0 + 7}"
-    ws.page_setup.orientation = "landscape"
-    ws.page_setup.paperSize = ws.PAPERSIZE_A4
-    ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 1
-    ws.sheet_properties.pageSetUpPr.fitToPage = True
-    ws.print_options.horizontalCentered = True
-    ws.page_margins.left = ws.page_margins.right = ws.page_margins.top = ws.page_margins.bottom = 0.3
-
-    for w in (ws_cad, ws_lanc, ws_rev, ws_contas, ws_parc, ws_orc, ws_potes, ws_anual, ws_hist, ws_p1, ws_p2, ws_inv, ws_ac, ws_at, ws_corr, ws_cfg):
+    for w in (ws_cad, ws_lanc, ws_rev, ws_ano, ws_p1, ws_inv, ws_at, ws_corr, ws_cfg):
         if w is None:
             continue
         w.page_setup.orientation = "landscape"
@@ -3168,10 +2719,8 @@ def construir(D, caminho):
         w.sheet_properties.pageSetUpPr.fitToPage = True
         w.page_margins.left = w.page_margins.right = 0.3
 
-    cores_guia = [(ws_ini, P["destaque"]), (ws_cad, P["positivo"]), (ws_contas, P["azul"]), (ws_parc, P["roxo"]), (ws_at, P["roxo"]),
-                  (ws_potes, P["positivo"]), (ws_corr, P["alerta"]),
-                  (ws_rev, P["negativo"]), (ws_p1, P["destaque"]), (ws_lanc, P["positivo"]), (ws_orc, P["alerta"]), (ws_anual, P["roxo"]),
-                  (ws_hist, P["roxo"]), (ws_inv, P["positivo"]), (ws_ac, P["alerta"]),
+    cores_guia = [(ws_cad, P["destaque"]), (ws_corr, P["alerta"]), (ws_lanc, P["positivo"]), (ws_inv, P["positivo"]),
+                  (ws_p1, P["destaque"]), (ws_ano, P["roxo"]), (ws_rev, P["negativo"]), (ws_at, P["roxo"]),
                   (ws_cfg, P["suave"]), (ws_calc, P["borda"])]
     for w, cor in cores_guia:
         if w is not None:
@@ -3194,12 +2743,12 @@ def construir(D, caminho):
     ws_cfg.sheet_state = "hidden"
     wb.active = 0
     for w in wb.worksheets:
-        w.sheet_view.tabSelected = w is ws_ini
+        w.sheet_view.tabSelected = w is ws_cad
     wb.calculation.fullCalcOnLoad = True
     wb.save(caminho)
     ini_i, fim_i = D["_linhas_importadas"]
     ignorar = " ".join(f"{D['_col_lanc'][h]}{ini_i}:{D['_col_lanc'][h]}{fim_i}" for h in COLS_AUTO)
-    pos_processar(caminho, {"Anual": ("C", "N", "Q", linhas_spark)}, {"Lancamentos": ignorar})
+    pos_processar(caminho, {"Visão do ano": ("C", "N", "Q", linhas_spark)}, {"Lancamentos": ignorar})
 
 
 # =============================================================================
@@ -3212,7 +2761,7 @@ NS_XM = "http://schemas.microsoft.com/office/excel/2006/main"
 
 
 def _xml_sparklines(aba, col_ini, col_fim, col_dest, linhas):
-    sp = "".join(f"<x14:sparkline><xm:f>{aba}!{col_ini}{r}:{col_fim}{r}</xm:f><xm:sqref>{col_dest}{r}</xm:sqref></x14:sparkline>"
+    sp = "".join(f"<x14:sparkline><xm:f>'{aba}'!{col_ini}{r}:{col_fim}{r}</xm:f><xm:sqref>{col_dest}{r}</xm:sqref></x14:sparkline>"
                  for r in linhas)
     cor = lambda h: f'rgb="FF{h}"'
     return (f'<ext uri="{{05C60535-1F16-4fd2-B633-F4F36F0B64E0}}" xmlns:x14="{NS_X14}">'
@@ -3302,6 +2851,7 @@ if __name__ == "__main__":
         dados = dados_exemplo()
         preparar_revisao(dados, {})
         preparar_acertos(dados)
+        preparar_previstas(dados)
     destino = ARGS.saida or os.path.join(pasta, NOME_ARQUIVO if ARGS.dados else "Financas_Pessoais_Dashboard_EXEMPLO.xlsx")
     construir(dados, destino)
     print(f"Planilha gerada: {destino} (tema {TEMA})")
